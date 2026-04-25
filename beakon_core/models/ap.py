@@ -1,0 +1,214 @@
+"""Bill + BillLine — accounts payable workflow on top of the kernel.
+
+Blueprint p.4 ("invoice/receipt ingestion") + p.2 ("no ledger entry should
+be posted without appropriate approval"). A Bill has its own status machine
+and emits journal entries at two lifecycle points:
+
+    approve()     → accrual JE posted: DR Expense / CR Accounts Payable
+    mark_paid()   → payment  JE posted: DR Accounts Payable / CR Bank
+
+Both JEs are created + submitted by the SYSTEM and approved + posted by the
+user who triggered the lifecycle action. That keeps the self-approval
+guard happy (system ≠ user) while avoiding a second human approval step.
+
+Status machine (v1):
+
+    draft → pending_approval → approved → paid
+                            → rejected → draft
+    draft → cancelled
+    pending_approval → cancelled
+
+Fields the AP aging report keys off: ``status='approved'`` AND no ``paid_at``
+yet. ``due_date`` slots those into age buckets.
+"""
+from decimal import Decimal
+
+from django.conf import settings
+from django.core.validators import MinValueValidator
+from django.db import models
+
+from organizations.models import Organization
+
+
+# ── Bill status ────────────────────────────────────────────────────────────
+BILL_DRAFT = "draft"
+BILL_PENDING_APPROVAL = "pending_approval"
+BILL_APPROVED = "approved"
+BILL_PAID = "paid"
+BILL_REJECTED = "rejected"
+BILL_CANCELLED = "cancelled"
+
+BILL_STATUS_CHOICES = [
+    (BILL_DRAFT, "Draft"),
+    (BILL_PENDING_APPROVAL, "Pending Approval"),
+    (BILL_APPROVED, "Approved"),
+    (BILL_PAID, "Paid"),
+    (BILL_REJECTED, "Rejected"),
+    (BILL_CANCELLED, "Cancelled"),
+]
+
+# Allowed status transitions — the service layer enforces these.
+BILL_TRANSITIONS = {
+    BILL_DRAFT:              {BILL_PENDING_APPROVAL, BILL_CANCELLED},
+    BILL_PENDING_APPROVAL:   {BILL_APPROVED, BILL_REJECTED, BILL_CANCELLED, BILL_DRAFT},
+    BILL_APPROVED:           {BILL_PAID},
+    BILL_REJECTED:           {BILL_DRAFT},
+    BILL_PAID:               set(),  # terminal — use JE reversal to correct
+    BILL_CANCELLED:          set(),  # terminal
+}
+
+BILL_EDITABLE = {BILL_DRAFT, BILL_REJECTED}
+# Bills in these statuses contribute to AP aging (outstanding payables).
+BILL_OUTSTANDING = {BILL_APPROVED}
+
+
+class Bill(models.Model):
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name="bills",
+    )
+    entity = models.ForeignKey(
+        "beakon_core.Entity", on_delete=models.PROTECT, related_name="bills",
+    )
+    vendor = models.ForeignKey(
+        "beakon_core.Vendor", on_delete=models.PROTECT, related_name="bills",
+    )
+
+    # Our internal reference — sequential per org.
+    reference = models.CharField(
+        max_length=50,
+        help_text="Auto-assigned BILL-NNNNNN per organization.",
+    )
+    # Vendor's invoice number — free text, often their system's ID.
+    bill_number = models.CharField(max_length=100, blank=True)
+
+    invoice_date = models.DateField()
+    due_date = models.DateField()
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    currency = models.CharField(max_length=3)
+    subtotal = models.DecimalField(
+        max_digits=19, decimal_places=4, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))],
+    )
+    tax_amount = models.DecimalField(
+        max_digits=19, decimal_places=4, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))],
+    )
+    total = models.DecimalField(
+        max_digits=19, decimal_places=4,
+        validators=[MinValueValidator(Decimal("0"))],
+    )
+
+    status = models.CharField(
+        max_length=20, choices=BILL_STATUS_CHOICES, default=BILL_DRAFT,
+    )
+
+    description = models.TextField(blank=True)
+    notes = models.TextField(blank=True)
+
+    # ── Accrual JE linkage (DR Expense / CR AP on approval) ──────────
+    accrual_journal_entry = models.ForeignKey(
+        "beakon_core.JournalEntry", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="billed_as_accrual",
+    )
+
+    # ── Payment linkage (DR AP / CR Bank on mark_paid) ───────────────
+    payment_journal_entry = models.ForeignKey(
+        "beakon_core.JournalEntry", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="billed_as_payment",
+    )
+    payment_date = models.DateField(null=True, blank=True)
+    payment_bank_account = models.ForeignKey(
+        "beakon_core.Account", on_delete=models.PROTECT,
+        null=True, blank=True, related_name="bills_paid_from",
+        help_text="Cash / bank account the payment was drawn from.",
+    )
+    payment_reference = models.CharField(
+        max_length=255, blank=True,
+        help_text="Wire ref, check number, or similar.",
+    )
+
+    # ── Actor stamps for each status transition ─────────────────────
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name="bills_created",
+    )
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="bills_submitted",
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="bills_approved",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="bills_rejected",
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    paid_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="bills_paid",
+    )
+    paid_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="bills_cancelled",
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "beakon_bill"
+        unique_together = ("organization", "reference")
+        ordering = ["-invoice_date", "-reference"]
+        indexes = [
+            models.Index(fields=["organization", "status"]),
+            models.Index(fields=["vendor", "status"]),
+            models.Index(fields=["entity", "status"]),
+            models.Index(fields=["due_date"]),
+        ]
+
+    def __str__(self):
+        return f"{self.reference} · {self.vendor.code} · {self.total} {self.currency}"
+
+
+class BillLine(models.Model):
+    bill = models.ForeignKey(
+        Bill, on_delete=models.CASCADE, related_name="lines",
+    )
+    expense_account = models.ForeignKey(
+        "beakon_core.Account", on_delete=models.PROTECT,
+        related_name="bill_lines",
+        help_text="The account that will be DEBITED on the accrual JE.",
+    )
+    description = models.CharField(max_length=500, blank=True)
+    quantity = models.DecimalField(
+        max_digits=12, decimal_places=4, default=Decimal("1"),
+    )
+    unit_price = models.DecimalField(
+        max_digits=19, decimal_places=4, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))],
+    )
+    amount = models.DecimalField(
+        max_digits=19, decimal_places=4,
+        validators=[MinValueValidator(Decimal("0"))],
+        help_text="Pre-tax amount for this line (= quantity × unit_price, usually).",
+    )
+    line_order = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = "beakon_billline"
+        ordering = ["line_order"]
+        indexes = [
+            models.Index(fields=["bill"]),
+            models.Index(fields=["expense_account"]),
+        ]
+
+    def __str__(self):
+        return f"{self.bill.reference}#{self.line_order}: {self.expense_account.code} {self.amount}"

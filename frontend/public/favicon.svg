@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Beakon">
+  <title>Beakon</title>
+  <defs>
+    <clipPath id="beakon-tile-clip">
+      <rect x="0" y="0" width="48" height="48" rx="11"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#beakon-tile-clip)">
+    <rect x="0" y="0" width="48" height="48" rx="11" fill="#234f60"/>
+    <circle cx="44" cy="4" r="13" fill="#3aa888"/>
+  </g>
+  <text x="13" y="36"
+        font-family='system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", sans-serif'
+        font-size="31" font-weight="800" letter-spacing="-1" fill="#ffffff">B</text>
+</svg>

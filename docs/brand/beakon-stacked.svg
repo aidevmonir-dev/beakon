@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 160" role="img" aria-label="Beakon — AI-native accounting">
+  <title>Beakon — AI-native accounting</title>
+  <defs>
+    <clipPath id="beakon-tile-clip-s">
+      <rect x="66" y="0" width="48" height="48" rx="11"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#beakon-tile-clip-s)">
+    <rect x="66" y="0" width="48" height="48" rx="11" fill="#234f60"/>
+    <circle cx="110" cy="4" r="13" fill="#3aa888"/>
+  </g>
+  <text x="79" y="36"
+        font-family='system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", sans-serif'
+        font-size="31" font-weight="800" letter-spacing="-1" fill="#ffffff">B</text>
+  <text x="90" y="100" text-anchor="middle"
+        font-family='system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", sans-serif'
+        font-size="34" font-weight="700" letter-spacing="-1.2" fill="#234f60">Beakon</text>
+  <text x="90" y="128" text-anchor="middle"
+        font-family='system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", sans-serif'
+        font-size="11" letter-spacing="3" fill="#234f60" opacity="0.55">AI-NATIVE ACCOUNTING</text>
+</svg>
