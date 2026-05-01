@@ -242,6 +242,19 @@ class JournalLine(models.Model):
         related_name="counterparty_journal_lines",
     )
 
+    # Rebillable flag — marks a cost line that should be passed through to a
+    # client. Behaves as a flag, not a dimension axis. The optional FK points
+    # at the client this is rebillable to (a DimensionValue under whichever
+    # DimensionType the org uses for "client" — service layer validates the
+    # type code, schema stays permissive so the categorizer can flip the
+    # flag before the client is identified).
+    is_rebillable = models.BooleanField(default=False)
+    rebill_client_dimension_value = models.ForeignKey(
+        "beakon_core.DimensionValue", on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="rebillable_lines",
+    )
+
     # Workbook-driven dimensional tags (Thomas's 2nd document). These are
     # stored as stable codes for now; later phases can replace or supplement
     # them with FKs into dedicated master tables and validation rules.
@@ -267,6 +280,7 @@ class JournalLine(models.Model):
             models.Index(fields=["journal_entry", "dimension_custodian_code"]),
             models.Index(fields=["journal_entry", "dimension_portfolio_code"]),
             models.Index(fields=["journal_entry", "dimension_instrument_code"]),
+            models.Index(fields=["journal_entry", "is_rebillable"]),
         ]
         constraints = [
             models.CheckConstraint(

@@ -256,6 +256,14 @@ class Account(models.Model):
     )
     code = models.CharField(max_length=20)
     name = models.CharField(max_length=255)
+    short_name = models.CharField(
+        max_length=120, blank=True,
+        help_text="Workbook Short_Name from 02 CoA Master, when imported.",
+    )
+    source_account_type = models.CharField(
+        max_length=30, blank=True,
+        help_text="Raw workbook Account_Type, e.g. HEADER, ASSET, INCOME, MEMO.",
+    )
     account_type = models.CharField(max_length=20, choices=c.ACCOUNT_TYPE_CHOICES)
     account_subtype = models.CharField(
         max_length=50, blank=True,
@@ -269,6 +277,26 @@ class Account(models.Model):
         max_length=3, blank=True,
         help_text="Blank = multi-currency account. A fixed currency restricts "
                   "journal lines against this account to that currency.",
+    )
+    level_no = models.PositiveIntegerField(null=True, blank=True)
+    posting_allowed = models.BooleanField(default=True)
+    header_flag = models.BooleanField(default=False)
+    mandatory_flag = models.BooleanField(default=False)
+    scope = models.CharField(max_length=30, blank=True)
+    report_group = models.CharField(max_length=120, blank=True)
+    cashflow_category = models.CharField(max_length=120, blank=True)
+    required_dimension_type_codes = models.CharField(max_length=255, blank=True)
+    optional_dimension_type_codes = models.CharField(max_length=255, blank=True)
+    dimension_validation_rule = models.CharField(max_length=255, blank=True)
+    universal_map_required = models.BooleanField(default=False)
+    default_universal_coa_code = models.CharField(max_length=120, blank=True)
+    mapping_method = models.CharField(max_length=120, blank=True)
+    fx_revalue_flag = models.BooleanField(default=False)
+    tax_relevant_flag = models.BooleanField(default=False)
+    monetary_flag = models.BooleanField(default=False)
+    workbook_metadata = models.JSONField(
+        default=dict, blank=True,
+        help_text="Additional workbook columns preserved for later phases.",
     )
     is_active = models.BooleanField(default=True)
     is_system = models.BooleanField(
@@ -296,11 +324,215 @@ class Account(models.Model):
 
     def save(self, *args, **kwargs):
         # Default normal_balance from account_type when not set.
-        if not self.normal_balance or self._state.adding:
+        if (
+            not self.normal_balance
+            or (
+                self._state.adding
+                and self.normal_balance == c.NORMAL_BALANCE_DEBIT
+                and c.NORMAL_BALANCE_MAP.get(self.account_type) == c.NORMAL_BALANCE_CREDIT
+            )
+        ):
             self.normal_balance = c.NORMAL_BALANCE_MAP.get(
                 self.account_type, c.NORMAL_BALANCE_DEBIT
             )
         super().save(*args, **kwargs)
+
+
+class CoAMapping(models.Model):
+    """Maps workbook source accounts to universal reporting codes.
+
+    Phase 1 imports Thomas's `03 CoA Mapping` tab here. The mapping is kept
+    separate from Account so the operational CoA can stay stable while the
+    universal layer evolves.
+    """
+
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name="beakon_coa_mappings"
+    )
+    coa_definition = models.ForeignKey(
+        CoADefinition, on_delete=models.CASCADE, related_name="mappings",
+    )
+    account = models.ForeignKey(
+        Account, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="universal_mappings",
+    )
+    mapping_id = models.CharField(max_length=80)
+    source_account_no = models.CharField(max_length=20)
+    source_account_name = models.CharField(max_length=255, blank=True)
+    universal_coa_code = models.CharField(max_length=80)
+    universal_coa_name = models.CharField(max_length=255, blank=True)
+    mapping_type = models.CharField(max_length=30, blank=True)
+    mapping_percent = models.DecimalField(
+        max_digits=7, decimal_places=4, default=Decimal("100"),
+    )
+    condition_rule = models.CharField(max_length=255, blank=True)
+    required_dimension = models.CharField(max_length=255, blank=True)
+    effective_from = models.DateField(null=True, blank=True)
+    effective_to = models.DateField(null=True, blank=True)
+    review_status = models.CharField(max_length=30, blank=True)
+    approved_by = models.CharField(max_length=120, blank=True)
+    notes = models.TextField(blank=True)
+    workbook_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "beakon_coa_mapping"
+        unique_together = ("organization", "mapping_id")
+        ordering = ["source_account_no", "mapping_id"]
+        indexes = [
+            models.Index(fields=["organization", "coa_definition"]),
+            models.Index(fields=["organization", "universal_coa_code"]),
+        ]
+
+    def __str__(self):
+        return f"{self.source_account_no} -> {self.universal_coa_code}"
+
+
+class DimensionType(models.Model):
+    """Reference catalog for dimension codes such as CCY, BANK, CUST, PORT."""
+
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name="beakon_dimension_types"
+    )
+    code = models.CharField(max_length=30)
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True)
+    applies_to = models.CharField(max_length=255, blank=True)
+    mandatory_flag = models.BooleanField(default=False)
+    multi_select_allowed = models.BooleanField(default=False)
+    master_data_owner = models.CharField(max_length=120, blank=True)
+    hierarchy_allowed = models.BooleanField(default=False)
+    active_flag = models.BooleanField(default=True)
+    notes = models.TextField(blank=True)
+    workbook_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "beakon_dimension_type"
+        unique_together = ("organization", "code")
+        ordering = ["code"]
+        indexes = [
+            models.Index(fields=["organization", "active_flag"]),
+        ]
+
+    def __str__(self):
+        return f"{self.code} · {self.name}"
+
+
+class DimensionValue(models.Model):
+    """Allowed values for a DimensionType.
+
+    Examples: CCY=CHF, BANK=BANK_CH_MAIN_001, PORT=PORT_MAIN.
+    """
+
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name="beakon_dimension_values"
+    )
+    dimension_type = models.ForeignKey(
+        DimensionType, on_delete=models.CASCADE, related_name="values",
+    )
+    code = models.CharField(max_length=80)
+    name = models.CharField(max_length=255)
+    parent_value_code = models.CharField(max_length=80, blank=True)
+    description = models.TextField(blank=True)
+    active_flag = models.BooleanField(default=True)
+    effective_from = models.DateField(null=True, blank=True)
+    effective_to = models.DateField(null=True, blank=True)
+    external_reference = models.CharField(max_length=255, blank=True)
+    notes = models.TextField(blank=True)
+    workbook_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "beakon_dimension_value"
+        unique_together = ("organization", "dimension_type", "code")
+        ordering = ["dimension_type__code", "code"]
+        indexes = [
+            models.Index(fields=["organization", "active_flag"]),
+            models.Index(fields=["organization", "code"]),
+        ]
+
+    def __str__(self):
+        return f"{self.dimension_type.code}:{self.code}"
+
+
+class ControlledListEntry(models.Model):
+    """Reusable workbook dropdown values from `06 Controlled Lists`."""
+
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name="beakon_controlled_list_entries"
+    )
+    list_name = models.CharField(max_length=100)
+    list_code = models.CharField(max_length=80)
+    list_value = models.CharField(max_length=255)
+    display_order = models.IntegerField(default=0)
+    active_flag = models.BooleanField(default=True)
+    description = models.TextField(blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "beakon_controlled_list_entry"
+        unique_together = ("organization", "list_name", "list_code")
+        ordering = ["list_name", "display_order", "list_value"]
+        indexes = [
+            models.Index(fields=["organization", "list_name", "active_flag"]),
+        ]
+
+    def __str__(self):
+        return f"{self.list_name}:{self.list_code}"
+
+
+class DimensionValidationRule(models.Model):
+    """Posting-time dimension requirements imported from workbook tab 09."""
+
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE,
+        related_name="beakon_dimension_validation_rules",
+    )
+    coa_definition = models.ForeignKey(
+        CoADefinition, on_delete=models.CASCADE, related_name="dimension_rules",
+    )
+    account = models.ForeignKey(
+        Account, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="dimension_validation_rules",
+    )
+    rule_id = models.CharField(max_length=80)
+    account_no = models.CharField(max_length=20)
+    account_name = models.CharField(max_length=255, blank=True)
+    rule_type = models.CharField(max_length=80, blank=True)
+    trigger_event = models.CharField(max_length=80, blank=True)
+    required_dimension_type_codes = models.CharField(max_length=255, blank=True)
+    optional_dimension_type_codes = models.CharField(max_length=255, blank=True)
+    conditional_dimension_type_codes = models.CharField(max_length=255, blank=True)
+    condition_expression = models.TextField(blank=True)
+    validation_error_message = models.TextField(blank=True)
+    severity = models.CharField(max_length=120, blank=True)
+    master_driver = models.CharField(max_length=120, blank=True)
+    active_flag = models.BooleanField(default=True)
+    effective_from = models.DateField(null=True, blank=True)
+    effective_to = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    workbook_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "beakon_dimension_validation_rule"
+        unique_together = ("organization", "rule_id")
+        ordering = ["account_no", "rule_id"]
+        indexes = [
+            models.Index(fields=["organization", "coa_definition"]),
+            models.Index(fields=["organization", "account"]),
+            models.Index(fields=["organization", "active_flag"]),
+        ]
+
+    def __str__(self):
+        return f"{self.rule_id} · {self.account_no}"
 
 
 class CustomAccountSubtype(models.Model):

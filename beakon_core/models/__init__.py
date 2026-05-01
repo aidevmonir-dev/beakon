@@ -12,8 +12,13 @@ from .core import (  # noqa: F401
     Currency,
     FXRate,
     CoADefinition,
+    CoAMapping,
     AccountGroup,
     Account,
+    DimensionType,
+    DimensionValue,
+    ControlledListEntry,
+    DimensionValidationRule,
     CustomAccountSubtype,
     CustomEntityType,
     Period,
@@ -28,3 +33,4 @@ from .documents import SourceDocument  # noqa: F401
 from .parties import Vendor, Customer  # noqa: F401
 from .ap import Bill, BillLine  # noqa: F401
 from .ar import Invoice, InvoiceLine  # noqa: F401
+from .masters import TaxLot  # noqa: F401
