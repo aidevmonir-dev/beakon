@@ -29,7 +29,7 @@ from django.db import transaction  # noqa: E402
 
 from beakon_core import constants as bc  # noqa: E402
 from beakon_core.models import (  # noqa: E402
-    Account, Currency, Entity, FXRate, Period,
+    Account, Currency, DimensionType, DimensionValue, Entity, FXRate, Period,
 )
 from beakon_core.services import JournalService, ReportsService  # noqa: E402
 from organizations.models import Organization  # noqa: E402
@@ -292,6 +292,119 @@ def main():
         assert len(detail["lines"]) == 2
         # History: draft-create, submitted, approved, posted
         assert len(detail["approval_history"]) >= 3
+
+        # ── Dimension filter ───────────────────────────────────────
+        # Seeds 2 DimensionTypes (BANK, PORT) + 4 values, then posts 3
+        # dimension-tagged opex JEs in HoldCo. Each JE tags BOTH sides
+        # (DR opex + CR bank) so a filtered TB stays balanced.
+        #   je_dim_a → BANK_A + PORT_X, opex 1000
+        #   je_dim_b → BANK_B + PORT_X, opex 1500
+        #   je_dim_c → BANK_A + PORT_Y, opex 2000
+        print("-- Dimension filter: seed catalog + 3 tagged JEs")
+        DimensionType.objects.update_or_create(
+            organization=org, code="BANK",
+            defaults={"name": "Bank", "active_flag": True},
+        )
+        DimensionType.objects.update_or_create(
+            organization=org, code="PORT",
+            defaults={"name": "Portfolio", "active_flag": True},
+        )
+        bank_type = DimensionType.objects.get(organization=org, code="BANK")
+        port_type = DimensionType.objects.get(organization=org, code="PORT")
+        for dt, code, name in [
+            (bank_type, "BANK_A", "Bank A"),
+            (bank_type, "BANK_B", "Bank B"),
+            (port_type, "PORT_X", "Portfolio X"),
+            (port_type, "PORT_Y", "Portfolio Y"),
+        ]:
+            DimensionValue.objects.update_or_create(
+                organization=org, dimension_type=dt, code=code,
+                defaults={"name": name, "active_flag": True},
+            )
+
+        def _dim_je(*, when, opex, bank_code, port_code, label):
+            je = JournalService.create_draft(
+                organization=org, entity=holdco, date=when,
+                memo=f"Dim test: {label}",
+                lines=[
+                    {"account_id": A[("RPT-HOLDCO", "6000")].id,
+                     "debit": opex,
+                     "dimension_bank_code": bank_code,
+                     "dimension_portfolio_code": port_code},
+                    {"account_id": A[("RPT-HOLDCO", "1010")].id,
+                     "credit": opex,
+                     "dimension_bank_code": bank_code,
+                     "dimension_portfolio_code": port_code},
+                ], user=alice,
+            )
+            full_cycle(je, creator=alice, approver=bob)
+            return je
+
+        _dim_je(when=date(2026, 4, 16), opex=Decimal("1000"),
+                bank_code="BANK_A", port_code="PORT_X", label="A+X")
+        _dim_je(when=date(2026, 4, 17), opex=Decimal("1500"),
+                bank_code="BANK_B", port_code="PORT_X", label="B+X")
+        _dim_je(when=date(2026, 4, 18), opex=Decimal("2000"),
+                bank_code="BANK_A", port_code="PORT_Y", label="A+Y")
+
+        def _opex_dr(tb):
+            for row in tb["accounts"]:
+                if row["code"] == "6000" and row["account_type"] == bc.ACCOUNT_TYPE_EXPENSE:
+                    return Decimal(row["debit"])
+            return Decimal("0")
+
+        # Case 1: no-filter call paths must be byte-identical.
+        # Baseline opex: 5000 (untagged je_opex) + 1000 + 1500 + 2000 = 9500.
+        tb_default = ReportsService.trial_balance(entity=holdco, as_of=date(2026, 4, 30))
+        tb_none = ReportsService.trial_balance(entity=holdco, as_of=date(2026, 4, 30),
+                                                dimension_filter=None)
+        tb_empty = ReportsService.trial_balance(entity=holdco, as_of=date(2026, 4, 30),
+                                                 dimension_filter={})
+        assert tb_default == tb_none == tb_empty, \
+            "no-filter / None / {} calls must produce byte-identical output"
+        assert _opex_dr(tb_default) == Decimal("9500.00"), \
+            f"baseline opex DR expected 9500, got {_opex_dr(tb_default)}"
+        print(f"  [1] no-filter: opex DR = {_opex_dr(tb_default)} (default == None == {{}} OK)")
+
+        # Case 2: single-type single-value — BANK_A only.
+        # je_dim_a (1000) + je_dim_c (2000) = 3000.
+        tb_a = ReportsService.trial_balance(
+            entity=holdco, as_of=date(2026, 4, 30),
+            dimension_filter={"BANK": ["BANK_A"]},
+        )
+        assert _opex_dr(tb_a) == Decimal("3000.00"), \
+            f"BANK_A opex DR expected 3000, got {_opex_dr(tb_a)}"
+        print(f"  [2] BANK=BANK_A: opex DR = {_opex_dr(tb_a)}")
+
+        # Case 3: single-type multi-value (OR within type) — BANK in {A, B}.
+        # 1000 + 1500 + 2000 = 4500.
+        tb_ab = ReportsService.trial_balance(
+            entity=holdco, as_of=date(2026, 4, 30),
+            dimension_filter={"BANK": ["BANK_A", "BANK_B"]},
+        )
+        assert _opex_dr(tb_ab) == Decimal("4500.00"), \
+            f"BANK in [A,B] opex DR expected 4500, got {_opex_dr(tb_ab)}"
+        print(f"  [3] BANK in [BANK_A, BANK_B]: opex DR = {_opex_dr(tb_ab)}")
+
+        # Case 4: two-type filter (AND across types) — BANK_A AND PORT_X.
+        # Only je_dim_a (1000) qualifies on both axes.
+        tb_ax = ReportsService.trial_balance(
+            entity=holdco, as_of=date(2026, 4, 30),
+            dimension_filter={"BANK": ["BANK_A"], "PORT": ["PORT_X"]},
+        )
+        assert _opex_dr(tb_ax) == Decimal("1000.00"), \
+            f"BANK_A AND PORT_X opex DR expected 1000, got {_opex_dr(tb_ax)}"
+        print(f"  [4] BANK=BANK_A AND PORT=PORT_X: opex DR = {_opex_dr(tb_ax)}")
+
+        # Bonus: unknown type code rejected (fail-loud, no silent unfiltered data).
+        try:
+            ReportsService.trial_balance(
+                entity=holdco, as_of=date(2026, 4, 30),
+                dimension_filter={"FAKE_TYPE": ["X"]},
+            )
+            assert False, "unknown dimension type code should have raised"
+        except ValueError:
+            print("  [5] unknown dimension type code rejected OK")
 
         print("OK: reports smoke test passed -- rolling back.")
         transaction.savepoint_rollback(sid)

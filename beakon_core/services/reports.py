@@ -48,6 +48,46 @@ from .fx import FXService
 ZERO = Decimal("0")
 
 
+# ── Dimension filter ───────────────────────────────────────────────────────
+# JournalLine carries dimensions as 7 flat string columns (migration 0008).
+# A `dimension_filter` parameter in the public API maps `DimensionType.code`
+# → list of `DimensionValue.code`s and is applied as:
+#   - AND across type codes (multiple chained `filter` calls)
+#   - OR within each type code (Django `__in` lookup)
+# Default behaviour (None or empty dict) returns the queryset unchanged so
+# every existing call site stays byte-identical.
+_DIMENSION_COLUMN = {
+    "BANK": "dimension_bank_code",
+    "CUST": "dimension_custodian_code",
+    "PORT": "dimension_portfolio_code",
+    "INST": "dimension_instrument_code",
+    "STR":  "dimension_strategy_code",
+    "ACL":  "dimension_asset_class_code",
+    "MAT":  "dimension_maturity_code",
+}
+
+
+def _apply_dimension_filter(qs, dimension_filter):
+    """Apply a {type_code: [value_codes]} filter to a JournalLine queryset.
+
+    Unknown type codes raise ``ValueError`` so a typo doesn't silently
+    return unfiltered data. Empty value lists are passed through to
+    Django's ``__in`` lookup, which returns no rows (the natural OR-of-
+    nothing semantic).
+    """
+    if not dimension_filter:
+        return qs
+    for type_code, value_codes in dimension_filter.items():
+        column = _DIMENSION_COLUMN.get(type_code)
+        if column is None:
+            raise ValueError(
+                f"Unknown dimension type code '{type_code}'. "
+                f"Valid codes: {sorted(_DIMENSION_COLUMN)}"
+            )
+        qs = qs.filter(**{f"{column}__in": list(value_codes)})
+    return qs
+
+
 # ── Cash flow categorization ───────────────────────────────────────────────
 # Maps an account subtype → (section, friendly label).
 #   section = "operating" | "investing" | "financing"
@@ -329,6 +369,7 @@ class ReportsService:
         organization=None,
         as_of: dt_date,
         reporting_currency: Optional[str] = None,
+        dimension_filter: Optional[dict] = None,
     ):
         """Return all accounts with their DR/CR totals in the report currency.
 
@@ -337,11 +378,17 @@ class ReportsService:
         - Consolidated mode: pass ``organization=org`` (no entity). Report
           currency defaults to the first entity's reporting/functional
           currency; override with ``reporting_currency``.
+        - ``dimension_filter`` is ``{type_code: [value_codes]}`` — AND across
+          type codes, OR within each. Filter selects journal lines whose
+          stored dimension code matches; unmatched lines are excluded.
+          Filtered TBs may be unbalanced — that is the intent (managerial
+          cut). Default ``None`` is byte-identical to the no-filter call.
         """
         if entity is None and organization is None:
             raise ValueError("trial_balance: must pass either entity or organization")
 
         lines = _posted_lines_qs(entity=entity, organization=organization, date_to=as_of)
+        lines = _apply_dimension_filter(lines, dimension_filter)
 
         # Default reporting currency
         if reporting_currency is None:
@@ -419,8 +466,12 @@ class ReportsService:
         date_from: dt_date,
         date_to: dt_date,
         reporting_currency: Optional[str] = None,
+        dimension_filter: Optional[dict] = None,
     ):
-        """Revenue − Expenses for the date range."""
+        """Revenue − Expenses for the date range.
+
+        ``dimension_filter`` semantics: see ``trial_balance``.
+        """
         if entity is None and organization is None:
             raise ValueError("profit_loss: must pass either entity or organization")
 
@@ -428,6 +479,7 @@ class ReportsService:
             entity=entity, organization=organization,
             date_from=date_from, date_to=date_to,
         ).filter(account__account_type__in=[c.ACCOUNT_TYPE_REVENUE, c.ACCOUNT_TYPE_EXPENSE])
+        lines = _apply_dimension_filter(lines, dimension_filter)
 
         if reporting_currency is None:
             reporting_currency = (
@@ -519,12 +571,17 @@ class ReportsService:
         organization=None,
         as_of: dt_date,
         reporting_currency: Optional[str] = None,
+        dimension_filter: Optional[dict] = None,
     ):
         """Assets = Liabilities + Equity as of a point in time.
 
         Includes a computed YTD net income line in equity so the equation
         balances even before the user formally closes the year-end into
         retained earnings.
+
+        ``dimension_filter`` semantics: see ``trial_balance``. The filter
+        is also threaded into the internal ``profit_loss`` call so the YTD
+        net income line is computed on the same line subset.
         """
         if entity is None and organization is None:
             raise ValueError("balance_sheet: must pass either entity or organization")
@@ -534,6 +591,7 @@ class ReportsService:
         ).filter(account__account_type__in=[
             c.ACCOUNT_TYPE_ASSET, c.ACCOUNT_TYPE_LIABILITY, c.ACCOUNT_TYPE_EQUITY,
         ])
+        lines = _apply_dimension_filter(lines, dimension_filter)
 
         if reporting_currency is None:
             reporting_currency = (
@@ -588,6 +646,7 @@ class ReportsService:
             entity=entity, organization=organization,
             date_from=ytd_start, date_to=as_of,
             reporting_currency=reporting_currency,
+            dimension_filter=dimension_filter,
         )
         ytd_net = Decimal(pnl["net_income"])
         sections["equity"]["accounts"].append({
@@ -932,10 +991,17 @@ class ReportsService:
         date_from: Optional[dt_date] = None,
         date_to: Optional[dt_date] = None,
         only_posted: bool = True,
+        dimension_filter: Optional[dict] = None,
     ):
         """Return every journal line on ``account``, with a running
         balance. Bridges the trial-balance row → its composing journal
-        entries (blueprint: 'drill-down from report to entry to source')."""
+        entries (blueprint: 'drill-down from report to entry to source').
+
+        ``dimension_filter`` semantics: see ``trial_balance``. The opening
+        balance is computed from lines BEFORE ``date_from`` honouring the
+        same filter, so opening + entries + running balance stay
+        internally consistent.
+        """
         qs = JournalLine.objects.filter(account=account).select_related(
             "journal_entry", "journal_entry__entity",
         )
@@ -945,19 +1011,24 @@ class ReportsService:
             qs = qs.filter(journal_entry__date__gte=date_from)
         if date_to:
             qs = qs.filter(journal_entry__date__lte=date_to)
+        qs = _apply_dimension_filter(qs, dimension_filter)
         qs = qs.order_by("journal_entry__date", "journal_entry__entry_number", "line_order")
 
         # Opening balance = sum of lines BEFORE date_from, if set.
+        # Threading dimension_filter through here keeps the opening +
+        # in-period entries + running balance consistent with each other.
         opening_dr = opening_cr = ZERO
         if date_from:
             pre = JournalLine.objects.filter(
                 account=account,
                 journal_entry__status__in=c.JE_LEDGER_IMPACTING,
                 journal_entry__date__lt=date_from,
-            ).aggregate(dr=Sum("functional_debit", default=ZERO),
-                        cr=Sum("functional_credit", default=ZERO))
-            opening_dr = pre["dr"] or ZERO
-            opening_cr = pre["cr"] or ZERO
+            )
+            pre = _apply_dimension_filter(pre, dimension_filter)
+            pre_agg = pre.aggregate(dr=Sum("functional_debit", default=ZERO),
+                                    cr=Sum("functional_credit", default=ZERO))
+            opening_dr = pre_agg["dr"] or ZERO
+            opening_cr = pre_agg["cr"] or ZERO
 
         # Running balance uses the account's normal balance side.
         if account.normal_balance == c.NORMAL_BALANCE_DEBIT:
@@ -1103,11 +1174,18 @@ class ReportsService:
 
     # ── Drill-down: single JE with full detail ──────────────────────────────
     @staticmethod
-    def entry_detail(*, entry: JournalEntry):
+    def entry_detail(*, entry: JournalEntry, dimension_filter: Optional[dict] = None):
         """Full JE payload: lines with account details, approval history,
-        source ref. Consumed by the UI's drill-down pane."""
+        source ref. Consumed by the UI's drill-down pane.
+
+        ``dimension_filter`` semantics: see ``trial_balance``. Filters the
+        ``lines`` collection in the response; approval history and
+        attachments are unchanged.
+        """
+        line_qs = entry.lines.select_related("account", "counterparty_entity")
+        line_qs = _apply_dimension_filter(line_qs, dimension_filter)
         lines = []
-        for ln in entry.lines.select_related("account", "counterparty_entity").order_by("line_order"):
+        for ln in line_qs.order_by("line_order"):
             lines.append({
                 "line_id": ln.id,
                 "account_id": ln.account_id,
