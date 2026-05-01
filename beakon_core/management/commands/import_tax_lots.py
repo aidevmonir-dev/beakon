@@ -101,7 +101,10 @@ class Command(BaseCommand):
             a.code: a for a in Account.objects.filter(organization=org)
         }
 
-        stats = {"created": 0, "updated": 0, "skipped_no_id": 0, "linked_account": 0}
+        stats = {
+            "created": 0, "updated": 0, "skipped_no_id": 0,
+            "skipped_explanation_row": 0, "linked_account": 0,
+        }
         errors: list[str] = []
 
         with transaction.atomic():
@@ -109,6 +112,11 @@ class Command(BaseCommand):
                 tax_lot_id = _text(row.get("Tax_Lot_ID"))
                 if not tax_lot_id:
                     stats["skipped_no_id"] += 1
+                    continue
+                # Tabs in this workbook contain explanation rows below the
+                # data. Real lots follow the `TLOT_…` workbook convention.
+                if not tax_lot_id.startswith("TLOT_"):
+                    stats["skipped_explanation_row"] += 1
                     continue
 
                 defaults = self._build_defaults(row, account_lookup, errors, stats)

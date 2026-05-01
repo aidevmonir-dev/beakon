@@ -19,10 +19,13 @@ from .models import (
     DimensionValidationRule,
     Entity,
     FXRate,
+    Instrument,
     IntercompanyGroup,
     JournalEntry,
     JournalLine,
+    Loan,
     Period,
+    Portfolio,
     TaxLot,
 )
 
@@ -259,6 +262,240 @@ class TaxLotAdmin(admin.ModelAdmin):
             "fields": ("wash_sale_flag", "corporate_action_adjusted_flag",
                        "source_transaction_reference",
                        "source_document_reference"),
+        }),
+        ("Round-trip", {
+            "classes": ("collapse",),
+            "fields": ("notes", "workbook_metadata", "created_at", "updated_at"),
+        }),
+    )
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Loan)
+class LoanAdmin(admin.ModelAdmin):
+    list_display = (
+        "loan_id", "loan_type", "loan_side", "status",
+        "borrower_or_lender_code", "loan_currency",
+        "current_principal_outstanding", "interest_rate_type",
+        "maturity_date", "organization",
+    )
+    list_filter = (
+        "loan_type", "loan_side", "status",
+        "interest_rate_type", "repayment_type", "valuation_basis",
+        "related_party_flag", "approval_required_flag",
+        "fx_remeasure_flag", "organization",
+    )
+    search_fields = (
+        "loan_id", "loan_name", "borrower_or_lender_code",
+        "facility_reference", "internal_reference",
+        "default_principal_account_code",
+        "default_interest_income_account_code",
+        "default_interest_expense_account_code",
+    )
+    raw_id_fields = (
+        "default_principal_account",
+        "default_interest_income_account",
+        "default_interest_expense_account",
+        "default_fx_gain_loss_account",
+    )
+    date_hierarchy = "start_date"
+    fieldsets = (
+        ("Identity", {
+            "fields": ("organization", "loan_id", "loan_name",
+                       "loan_type", "loan_side", "status"),
+        }),
+        ("Parties / refs", {
+            "fields": ("borrower_or_lender_code", "related_party_flag",
+                       "facility_reference", "internal_reference"),
+        }),
+        ("Principal & rate", {
+            "fields": ("loan_currency", "principal_original",
+                       "current_principal_outstanding",
+                       "interest_rate_type", "fixed_rate",
+                       "reference_rate_code", "spread_bps"),
+        }),
+        ("Frequencies & day count", {
+            "fields": ("interest_reset_frequency", "interest_payment_frequency",
+                       "day_count_convention"),
+        }),
+        ("Lifecycle dates", {
+            "fields": ("start_date", "first_accrual_date", "maturity_date",
+                       "next_reset_date", "next_interest_payment_date",
+                       "next_principal_payment_date",
+                       "effective_from", "effective_to"),
+        }),
+        ("Repayment & amortization", {
+            "fields": ("repayment_type", "amortization_method",
+                       "bullet_flag", "scheduled_principal_amount",
+                       "prepayment_allowed_flag", "capitalized_interest_flag"),
+        }),
+        ("Linkage & collateral", {
+            "fields": ("reporting_portfolio_code",
+                       "collateral_link_type", "collateral_link_id"),
+        }),
+        ("Valuation & policy", {
+            "fields": ("current_noncurrent_split_method",
+                       "valuation_basis", "impairment_method",
+                       "accrual_required_flag", "fx_remeasure_flag"),
+        }),
+        ("Default GL accounts", {
+            "fields": ("default_principal_account_code", "default_principal_account",
+                       "default_interest_income_account_code",
+                       "default_interest_income_account",
+                       "default_interest_expense_account_code",
+                       "default_interest_expense_account",
+                       "default_fx_gain_loss_account_code",
+                       "default_fx_gain_loss_account"),
+        }),
+        ("Workflow flags", {
+            "fields": ("approval_required_flag", "manual_override_allowed_flag",
+                       "source_document_required_flag"),
+        }),
+        ("Round-trip", {
+            "classes": ("collapse",),
+            "fields": ("notes", "workbook_metadata", "created_at", "updated_at"),
+        }),
+    )
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Instrument)
+class InstrumentAdmin(admin.ModelAdmin):
+    list_display = (
+        "instrument_id", "instrument_name", "instrument_type",
+        "quoted_unquoted_flag", "asset_class_code", "portfolio_default",
+        "custodian_default", "currency", "valuation_method", "status",
+    )
+    list_filter = (
+        "instrument_type", "quoted_unquoted_flag", "valuation_method",
+        "price_source", "income_type", "income_frequency",
+        "asset_class_code", "portfolio_default", "custodian_default",
+        "currency", "status", "fx_exposure_flag", "tax_lot_required",
+        "commitment_flag", "loan_linked_flag", "related_party_flag",
+        "esg_or_restriction_flag", "organization",
+    )
+    search_fields = (
+        "instrument_id", "instrument_name", "instrument_type",
+        "isin_or_ticker", "internal_reference",
+        "issuer_or_counterparty_code", "loan_workbook_id",
+        "default_principal_account_code",
+        "default_income_account_code",
+        "default_expense_account_code",
+        "default_realized_gl_account_code",
+        "default_unrealized_gl_account_code",
+        "default_fx_gl_account_code",
+    )
+    raw_id_fields = (
+        "loan",
+        "default_principal_account",
+        "default_income_account",
+        "default_expense_account",
+        "default_realized_gl_account",
+        "default_unrealized_gl_account",
+        "default_fx_gl_account",
+    )
+    date_hierarchy = "inception_date"
+    fieldsets = (
+        ("Identity", {
+            "fields": ("organization", "instrument_id", "instrument_name",
+                       "instrument_type", "quoted_unquoted_flag", "status"),
+        }),
+        ("Classification", {
+            "fields": ("asset_class_code", "strategy_code",
+                       "portfolio_default", "custodian_default",
+                       "issuer_or_counterparty_code", "related_party_flag",
+                       "isin_or_ticker", "internal_reference"),
+        }),
+        ("Currency / jurisdiction", {
+            "fields": ("currency", "jurisdiction_code", "domicile_code"),
+        }),
+        ("Commitment / loan linkage", {
+            "fields": ("commitment_flag", "commitment_code",
+                       "loan_linked_flag", "loan_workbook_id", "loan",
+                       "tax_lot_required"),
+        }),
+        ("Income & valuation", {
+            "fields": ("income_type", "income_frequency",
+                       "valuation_method", "price_source",
+                       "fx_exposure_flag", "impairment_method",
+                       "esg_or_restriction_flag", "restriction_type_code"),
+        }),
+        ("Lifecycle", {
+            "fields": ("inception_date", "maturity_date",
+                       "settlement_cycle", "day_count_convention",
+                       "effective_from", "effective_to"),
+        }),
+        ("Reporting", {
+            "fields": ("performance_group", "report_category_code"),
+        }),
+        ("Default GL accounts", {
+            "fields": ("default_principal_account_code", "default_principal_account",
+                       "default_income_account_code", "default_income_account",
+                       "default_expense_account_code", "default_expense_account",
+                       "default_realized_gl_account_code", "default_realized_gl_account",
+                       "default_unrealized_gl_account_code", "default_unrealized_gl_account",
+                       "default_fx_gl_account_code", "default_fx_gl_account"),
+        }),
+        ("Round-trip", {
+            "classes": ("collapse",),
+            "fields": ("notes", "workbook_metadata", "created_at", "updated_at"),
+        }),
+    )
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Portfolio)
+class PortfolioAdmin(admin.ModelAdmin):
+    list_display = (
+        "portfolio_id", "portfolio_name", "portfolio_type", "portfolio_subtype",
+        "owner_type", "linked_custodian_id", "base_currency",
+        "discretionary_flag", "status", "active_flag",
+    )
+    list_filter = (
+        "portfolio_type", "portfolio_subtype", "owner_type", "status",
+        "active_flag", "discretionary_flag", "consolidation_flag",
+        "net_worth_inclusion_flag", "performance_report_flag",
+        "posting_allowed_flag", "base_currency", "country_code",
+        "linked_custodian_id", "reporting_group", "organization",
+    )
+    search_fields = (
+        "portfolio_id", "portfolio_name", "short_name",
+        "portfolio_subtype", "owner_id", "primary_related_party_id",
+        "linked_custodian_id", "strategy_code", "asset_allocation_profile",
+        "parent_portfolio_workbook_id", "reporting_group", "notes",
+    )
+    raw_id_fields = ("parent",)
+    date_hierarchy = "open_date"
+    fieldsets = (
+        ("Identity", {
+            "fields": ("organization", "portfolio_id", "portfolio_name",
+                       "short_name", "portfolio_type", "portfolio_subtype"),
+        }),
+        ("Ownership", {
+            "fields": ("owner_type", "owner_id", "primary_related_party_id",
+                       "linked_custodian_id"),
+        }),
+        ("Currency / jurisdiction", {
+            "fields": ("base_currency", "reporting_currency",
+                       "country_code", "jurisdiction_code"),
+        }),
+        ("Strategy & allocation", {
+            "fields": ("strategy_code", "asset_allocation_profile"),
+        }),
+        ("Flags", {
+            "fields": ("discretionary_flag", "consolidation_flag",
+                       "net_worth_inclusion_flag", "performance_report_flag",
+                       "posting_allowed_flag"),
+        }),
+        ("Lifecycle", {
+            "fields": ("status", "active_flag", "open_date", "close_date"),
+        }),
+        ("Hierarchy", {
+            "fields": ("parent_portfolio_workbook_id", "parent"),
+        }),
+        ("Reporting & workflow", {
+            "fields": ("reporting_group", "approval_required_flag",
+                       "source_document_required_flag"),
         }),
         ("Round-trip", {
             "classes": ("collapse",),

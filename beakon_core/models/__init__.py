@@ -33,4 +33,4 @@ from .documents import SourceDocument  # noqa: F401
 from .parties import Vendor, Customer  # noqa: F401
 from .ap import Bill, BillLine  # noqa: F401
 from .ar import Invoice, InvoiceLine  # noqa: F401
-from .masters import TaxLot  # noqa: F401
+from .masters import Instrument, Loan, Portfolio, TaxLot  # noqa: F401

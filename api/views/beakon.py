@@ -23,6 +23,14 @@ from api.serializers.beakon import (
     AccountSerializer,
     CustomAccountSubtypeSerializer,
     CustomEntityTypeSerializer,
+    CoAMappingSerializer,
+    ControlledListEntrySerializer,
+    DimensionTypeSerializer,
+    DimensionValueSerializer,
+    DimensionValidationRuleSerializer,
+    InstrumentSerializer,
+    LoanSerializer,
+    TaxLotSerializer,
     ApprovalActionSerializer,
     BillCreateSerializer,
     BillDetailSerializer,
@@ -57,16 +65,24 @@ from beakon_core.models import (
     ApprovalAction,
     Bill,
     CoADefinition,
+    CoAMapping,
+    ControlledListEntry,
     Currency,
     CustomAccountSubtype,
     CustomEntityType,
     Customer,
+    DimensionType,
+    DimensionValue,
+    DimensionValidationRule,
     Entity,
     FXRate,
     IntercompanyGroup,
     Invoice,
+    Instrument,
     JournalEntry,
+    Loan,
     Period,
+    TaxLot,
     Vendor,
 )
 from beakon_core.services import (
@@ -200,6 +216,190 @@ class AccountViewSet(OrganizationFilterMixin, ModelViewSet):
     filterset_fields = ["entity", "coa_definition", "account_type", "account_subtype", "is_active"]
     search_fields = ["code", "name"]
     ordering_fields = ["code", "name", "account_type"]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class CoAMappingViewSet(OrganizationFilterMixin, ModelViewSet):
+    serializer_class = CoAMappingSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = CoAMapping.objects.select_related("coa_definition", "account")
+    filterset_fields = ["coa_definition", "mapping_type", "review_status"]
+    search_fields = [
+        "mapping_id", "source_account_no", "source_account_name",
+        "universal_coa_code", "universal_coa_name",
+    ]
+    ordering_fields = ["source_account_no", "mapping_id", "universal_coa_code"]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class DimensionTypeViewSet(OrganizationFilterMixin, ModelViewSet):
+    serializer_class = DimensionTypeSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = DimensionType.objects.all()
+    filterset_fields = ["active_flag", "mandatory_flag"]
+    search_fields = ["code", "name", "description", "applies_to"]
+    ordering_fields = ["code", "name"]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class DimensionValueViewSet(OrganizationFilterMixin, ModelViewSet):
+    serializer_class = DimensionValueSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = DimensionValue.objects.select_related("dimension_type")
+    filterset_fields = ["dimension_type", "active_flag"]
+    search_fields = ["code", "name", "description", "external_reference"]
+    ordering_fields = ["dimension_type__code", "code", "name"]
+
+    def get_queryset(self):
+        # ``?type=<code>`` is an alias for ``?dimension_type__code=<code>``.
+        # Spec calls for the friendlier code-based filter; the FK-id form
+        # via ``?dimension_type=<id>`` (filterset_fields) keeps working.
+        qs = super().get_queryset()
+        type_code = self.request.query_params.get("type")
+        if type_code:
+            qs = qs.filter(dimension_type__code=type_code)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class ControlledListEntryViewSet(OrganizationFilterMixin, ModelViewSet):
+    serializer_class = ControlledListEntrySerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = ControlledListEntry.objects.all()
+    filterset_fields = ["list_name", "active_flag"]
+    search_fields = ["list_name", "list_code", "list_value", "description"]
+    ordering_fields = ["list_name", "display_order", "list_value"]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class DimensionValidationRuleViewSet(OrganizationFilterMixin, ModelViewSet):
+    serializer_class = DimensionValidationRuleSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = DimensionValidationRule.objects.select_related("coa_definition", "account")
+    filterset_fields = [
+        "coa_definition", "account", "rule_type", "trigger_event",
+        "severity", "active_flag",
+    ]
+    search_fields = [
+        "rule_id", "account_no", "account_name",
+        "required_dimension_type_codes", "optional_dimension_type_codes",
+    ]
+    ordering_fields = ["account_no", "rule_id", "rule_type"]
+
+
+# ── Master tables (workbook tabs 07–17) ─────────────────────────────────────
+
+class TaxLotViewSet(OrganizationFilterMixin, ModelViewSet):
+    """Workbook tab `17_Tax_Lot_Master`. Read+write within the org scope."""
+    serializer_class = TaxLotSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = TaxLot.objects.select_related("account")
+    filterset_fields = [
+        "account", "lot_status", "cost_basis_method",
+        "instrument_code", "portfolio_code", "custodian_code",
+        "acquisition_currency", "active_flag",
+        "wash_sale_flag", "corporate_action_adjusted_flag",
+    ]
+    search_fields = [
+        "tax_lot_id", "instrument_code", "portfolio_code", "custodian_code",
+        "account_no", "source_transaction_reference", "source_document_reference",
+    ]
+    ordering_fields = [
+        "tax_lot_id", "acquisition_trade_date", "lot_status",
+        "remaining_quantity", "remaining_cost_reporting_ccy",
+    ]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class InstrumentViewSet(OrganizationFilterMixin, ModelViewSet):
+    """Workbook tab `08 Instrument Master`. Governed investments + default
+    GL routing for posting income / valuation movements."""
+    serializer_class = InstrumentSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = Instrument.objects.select_related(
+        "loan",
+        "default_principal_account",
+        "default_income_account",
+        "default_expense_account",
+        "default_realized_gl_account",
+        "default_unrealized_gl_account",
+        "default_fx_gl_account",
+    )
+    filterset_fields = [
+        "instrument_type", "quoted_unquoted_flag", "valuation_method",
+        "price_source", "income_type", "income_frequency",
+        "asset_class_code", "strategy_code",
+        "portfolio_default", "custodian_default",
+        "currency", "status",
+        "fx_exposure_flag", "tax_lot_required",
+        "commitment_flag", "loan_linked_flag", "related_party_flag",
+        "esg_or_restriction_flag",
+    ]
+    search_fields = [
+        "instrument_id", "instrument_name", "instrument_type",
+        "isin_or_ticker", "internal_reference",
+        "issuer_or_counterparty_code", "loan_workbook_id",
+        "default_principal_account_code", "default_income_account_code",
+        "default_expense_account_code", "default_realized_gl_account_code",
+        "default_unrealized_gl_account_code", "default_fx_gl_account_code",
+        "notes",
+    ]
+    ordering_fields = [
+        "instrument_id", "instrument_type", "status",
+        "inception_date", "maturity_date",
+    ]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class LoanViewSet(OrganizationFilterMixin, ModelViewSet):
+    """Workbook tab `07 Loan Master`. Governed loan agreements for AR/AP/AS lending."""
+    serializer_class = LoanSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = Loan.objects.select_related(
+        "default_principal_account",
+        "default_interest_income_account",
+        "default_interest_expense_account",
+        "default_fx_gain_loss_account",
+    )
+    filterset_fields = [
+        "loan_type", "loan_side", "status",
+        "interest_rate_type", "repayment_type", "valuation_basis",
+        "borrower_or_lender_code", "reporting_portfolio_code",
+        "collateral_link_type", "loan_currency",
+        "related_party_flag", "fx_remeasure_flag",
+        "approval_required_flag", "manual_override_allowed_flag",
+        "source_document_required_flag",
+    ]
+    search_fields = [
+        "loan_id", "loan_name", "borrower_or_lender_code",
+        "facility_reference", "internal_reference",
+        "default_principal_account_code",
+        "default_interest_income_account_code",
+        "default_interest_expense_account_code",
+        "collateral_link_id", "notes",
+    ]
+    ordering_fields = [
+        "loan_id", "loan_type", "loan_side", "status",
+        "start_date", "maturity_date",
+        "current_principal_outstanding",
+    ]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
 
     def perform_create(self, serializer):
         serializer.save(organization=self.request.organization)
@@ -927,6 +1127,8 @@ class AIBillDraftView(APIView):
                 "suggested_account_reasoning": result["extraction"]["suggested_account_reasoning"],
                 "accounting_standard_reasoning": result["extraction"].get("accounting_standard_reasoning"),
                 "entity_accounting_standard": entity.accounting_standard,
+                "service_period_start": result["extraction"].get("service_period_start"),
+                "service_period_end": result["extraction"].get("service_period_end"),
             },
             "warnings": result["warnings"],
         }, status=http.HTTP_201_CREATED)
@@ -1052,6 +1254,8 @@ class AIBillDraftStreamView(APIView):
                     "suggested_account_reasoning": extracted.get("suggested_account_reasoning"),
                     "accounting_standard_reasoning": extracted.get("accounting_standard_reasoning"),
                     "entity_accounting_standard": entity.accounting_standard,
+                    "service_period_start": extracted.get("service_period_start"),
+                    "service_period_end": extracted.get("service_period_end"),
                 },
                 "warnings": result["warnings"],
             })
@@ -1288,6 +1492,71 @@ class AskBeakonView(APIView):
 
 # ── Journal Entry ───────────────────────────────────────────────────────────
 
+def _resolve_line_dimensions(lines, organization):
+    """Mutate ``lines`` in place: convert each line's structured
+    ``dimensions`` array into the corresponding flat ``dimension_*_code``
+    columns expected by ``JournalService.create_draft``.
+
+    Validates: org scope, type-code/value-type match, no duplicate type
+    codes per line, and the type code is one of the 7 known columns.
+    Raises ``BeakonError`` for any failure so the caller can return a
+    structured 422 via ``_beakon_error_response``.
+
+    Flat ``dimension_*_code`` strings already in the line dict are kept;
+    a structured entry overwrites the flat string for the same column.
+    """
+    from beakon_core.services.reports import DIMENSION_COLUMN
+
+    for idx, line in enumerate(lines):
+        dims = line.pop("dimensions", None) or []
+        if not dims:
+            continue
+        seen_types = set()
+        for d in dims:
+            type_code = d["type_code"]
+            value_id = d["value_id"]
+            if type_code in seen_types:
+                raise BeakonError(
+                    f"Line {idx}: duplicate dimension type_code '{type_code}'",
+                    code="dimension_duplicate_type",
+                    details={"line_index": idx, "type_code": type_code},
+                )
+            seen_types.add(type_code)
+            column = DIMENSION_COLUMN.get(type_code)
+            if column is None:
+                raise BeakonError(
+                    f"Line {idx}: unknown dimension type_code '{type_code}'. "
+                    f"Valid: {sorted(DIMENSION_COLUMN)}",
+                    code="dimension_unknown_type",
+                    details={"line_index": idx, "type_code": type_code},
+                )
+            try:
+                value = (
+                    DimensionValue.objects
+                    .select_related("dimension_type")
+                    .get(id=value_id, organization=organization)
+                )
+            except DimensionValue.DoesNotExist:
+                raise BeakonError(
+                    f"Line {idx}: DimensionValue {value_id} not found in this organization",
+                    code="dimension_value_not_found",
+                    details={"line_index": idx, "value_id": value_id},
+                )
+            if value.dimension_type.code != type_code:
+                raise BeakonError(
+                    f"Line {idx}: DimensionValue {value_id} belongs to type "
+                    f"'{value.dimension_type.code}', not '{type_code}'",
+                    code="dimension_type_mismatch",
+                    details={
+                        "line_index": idx,
+                        "value_id": value_id,
+                        "expected_type": type_code,
+                        "actual_type": value.dimension_type.code,
+                    },
+                )
+            line[column] = value.code
+
+
 class JournalEntryViewSet(OrganizationFilterMixin, GenericViewSet):
     """Custom viewset — uses JournalService for every write path.
 
@@ -1358,6 +1627,13 @@ class JournalEntryViewSet(OrganizationFilterMixin, GenericViewSet):
                 )
             except Entity.DoesNotExist:
                 return Response(status=http.HTTP_404_NOT_FOUND)
+
+        # Resolve any structured ``dimensions`` array on each line into
+        # the flat ``dimension_*_code`` columns the kernel stores.
+        try:
+            _resolve_line_dimensions(v["lines"], request.organization)
+        except BeakonError as e:
+            return _beakon_error_response(e)
 
         try:
             entry = JournalService.create_draft(

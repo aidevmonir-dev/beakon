@@ -4,6 +4,7 @@ journal listing, account ledger, entry detail.
 All read-only; all scoped by organization. The frontend drills down by
 chaining: trial-balance row → account-ledger(account_id) → entry-detail(entry_id).
 """
+import json
 from collections import defaultdict
 from datetime import date as dt_date
 from decimal import Decimal
@@ -25,6 +26,40 @@ def _parse_date(s):
     if not s:
         return None
     return dt_date.fromisoformat(s)
+
+
+def _parse_dimension_filter(request):
+    """Parse the ``?dimension_filter=<json>`` query param.
+
+    Wire shape: a JSON object mapping ``DimensionType.code`` → list of
+    ``DimensionValue.code`` strings, e.g.
+        ?dimension_filter=%7B%22BANK%22%3A%5B%22BANK_A%22%5D%7D
+
+    Returns ``(parsed_dict_or_None, error_response_or_None)``. Malformed
+    JSON or non-object values produce a 400 response. The kernel's
+    ``ReportsService`` then validates type codes and raises ``ValueError``
+    on unknown ones — callers catch that and return 400 too.
+    """
+    raw = request.query_params.get("dimension_filter")
+    if not raw:
+        return None, None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return None, Response(
+            {"error": {"message": f"Invalid JSON in dimension_filter: {e}"}},
+            status=http.HTTP_400_BAD_REQUEST,
+        )
+    if not isinstance(data, dict):
+        return None, Response(
+            {"error": {"message": "dimension_filter must be a JSON object"}},
+            status=http.HTTP_400_BAD_REQUEST,
+        )
+    return data, None
+
+
+def _bad_request(message):
+    return Response({"error": {"message": message}}, status=http.HTTP_400_BAD_REQUEST)
 
 
 def _resolve_entity(request):
@@ -60,15 +95,19 @@ class TrialBalanceView(_ReportBase):
             return err
         as_of = _parse_date(request.query_params.get("as_of"))
         if not as_of:
-            return Response(
-                {"error": {"message": "as_of is required (YYYY-MM-DD)"}},
-                status=http.HTTP_400_BAD_REQUEST,
-            )
+            return _bad_request("as_of is required (YYYY-MM-DD)")
         reporting_currency = request.query_params.get("reporting_currency") or None
-        data = ReportsService.trial_balance(
-            entity=entity, organization=organization,
-            as_of=as_of, reporting_currency=reporting_currency,
-        )
+        df, df_err = _parse_dimension_filter(request)
+        if df_err:
+            return df_err
+        try:
+            data = ReportsService.trial_balance(
+                entity=entity, organization=organization,
+                as_of=as_of, reporting_currency=reporting_currency,
+                dimension_filter=df,
+            )
+        except ValueError as e:
+            return _bad_request(str(e))
         return Response(data)
 
 
@@ -80,16 +119,20 @@ class ProfitLossView(_ReportBase):
         date_from = _parse_date(request.query_params.get("date_from"))
         date_to = _parse_date(request.query_params.get("date_to"))
         if not date_from or not date_to:
-            return Response(
-                {"error": {"message": "date_from and date_to are required"}},
-                status=http.HTTP_400_BAD_REQUEST,
-            )
+            return _bad_request("date_from and date_to are required")
         reporting_currency = request.query_params.get("reporting_currency") or None
-        data = ReportsService.profit_loss(
-            entity=entity, organization=organization,
-            date_from=date_from, date_to=date_to,
-            reporting_currency=reporting_currency,
-        )
+        df, df_err = _parse_dimension_filter(request)
+        if df_err:
+            return df_err
+        try:
+            data = ReportsService.profit_loss(
+                entity=entity, organization=organization,
+                date_from=date_from, date_to=date_to,
+                reporting_currency=reporting_currency,
+                dimension_filter=df,
+            )
+        except ValueError as e:
+            return _bad_request(str(e))
         return Response(data)
 
 
@@ -100,15 +143,19 @@ class BalanceSheetView(_ReportBase):
             return err
         as_of = _parse_date(request.query_params.get("as_of"))
         if not as_of:
-            return Response(
-                {"error": {"message": "as_of is required (YYYY-MM-DD)"}},
-                status=http.HTTP_400_BAD_REQUEST,
-            )
+            return _bad_request("as_of is required (YYYY-MM-DD)")
         reporting_currency = request.query_params.get("reporting_currency") or None
-        data = ReportsService.balance_sheet(
-            entity=entity, organization=organization,
-            as_of=as_of, reporting_currency=reporting_currency,
-        )
+        df, df_err = _parse_dimension_filter(request)
+        if df_err:
+            return df_err
+        try:
+            data = ReportsService.balance_sheet(
+                entity=entity, organization=organization,
+                as_of=as_of, reporting_currency=reporting_currency,
+                dimension_filter=df,
+            )
+        except ValueError as e:
+            return _bad_request(str(e))
         return Response(data)
 
 
@@ -218,20 +265,24 @@ class AccountLedgerView(APIView):
     def get(self, request):
         account_id = request.query_params.get("account_id")
         if not account_id:
-            return Response(
-                {"error": {"message": "account_id is required"}},
-                status=http.HTTP_400_BAD_REQUEST,
-            )
+            return _bad_request("account_id is required")
         try:
             account = Account.objects.get(id=account_id, organization=request.organization)
         except Account.DoesNotExist:
             return Response(status=http.HTTP_404_NOT_FOUND)
-        data = ReportsService.account_ledger(
-            account=account,
-            date_from=_parse_date(request.query_params.get("date_from")),
-            date_to=_parse_date(request.query_params.get("date_to")),
-            only_posted=request.query_params.get("only_posted", "true").lower() != "false",
-        )
+        df, df_err = _parse_dimension_filter(request)
+        if df_err:
+            return df_err
+        try:
+            data = ReportsService.account_ledger(
+                account=account,
+                date_from=_parse_date(request.query_params.get("date_from")),
+                date_to=_parse_date(request.query_params.get("date_to")),
+                only_posted=request.query_params.get("only_posted", "true").lower() != "false",
+                dimension_filter=df,
+            )
+        except ValueError as e:
+            return _bad_request(str(e))
         return Response(data)
 
 
@@ -245,10 +296,7 @@ class EntryDetailView(APIView):
     def get(self, request):
         entry_id = request.query_params.get("entry_id")
         if not entry_id:
-            return Response(
-                {"error": {"message": "entry_id is required"}},
-                status=http.HTTP_400_BAD_REQUEST,
-            )
+            return _bad_request("entry_id is required")
         try:
             entry = JournalEntry.objects.select_related(
                 "entity", "period", "reversal_of",
@@ -257,7 +305,14 @@ class EntryDetailView(APIView):
             )
         except JournalEntry.DoesNotExist:
             return Response(status=http.HTTP_404_NOT_FOUND)
-        return Response(ReportsService.entry_detail(entry=entry))
+        df, df_err = _parse_dimension_filter(request)
+        if df_err:
+            return df_err
+        try:
+            data = ReportsService.entry_detail(entry=entry, dimension_filter=df)
+        except ValueError as e:
+            return _bad_request(str(e))
+        return Response(data)
 
 
 def _month_starts_back(n: int):

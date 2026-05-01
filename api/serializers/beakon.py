@@ -16,17 +16,26 @@ from beakon_core.models import (
     BillLine,
     Currency,
     CoADefinition,
+    CoAMapping,
+    ControlledListEntry,
     CustomAccountSubtype,
     CustomEntityType,
     Customer,
+    DimensionType,
+    DimensionValue,
+    DimensionValidationRule,
     Entity,
     FXRate,
     IntercompanyGroup,
     Invoice,
     InvoiceLine,
+    Instrument,
     JournalEntry,
     JournalLine,
+    Loan,
     Period,
+    Portfolio,
+    TaxLot,
     Vendor,
 )
 
@@ -130,8 +139,16 @@ class AccountSerializer(serializers.ModelSerializer):
         fields = (
             "id", "code", "name", "entity", "entity_code",
             "coa_definition", "coa_definition_code",
+            "short_name", "source_account_type",
             "account_type", "account_subtype", "normal_balance",
             "currency", "parent", "group",
+            "level_no", "posting_allowed", "header_flag", "mandatory_flag",
+            "scope", "report_group", "cashflow_category",
+            "required_dimension_type_codes", "optional_dimension_type_codes",
+            "dimension_validation_rule", "universal_map_required",
+            "default_universal_coa_code", "mapping_method",
+            "fx_revalue_flag", "tax_relevant_flag", "monetary_flag",
+            "workbook_metadata",
             "is_active", "is_system", "description",
             "created_at", "updated_at",
         )
@@ -147,6 +164,102 @@ class AccountSerializer(serializers.ModelSerializer):
         if not obj.coa_definition_id:
             return None
         return obj.coa_definition.coa_id
+
+
+class CoAMappingSerializer(serializers.ModelSerializer):
+    coa_definition_code = serializers.SerializerMethodField()
+    account_code = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CoAMapping
+        fields = (
+            "id", "mapping_id", "coa_definition", "coa_definition_code",
+            "account", "account_code", "source_account_no",
+            "source_account_name", "universal_coa_code", "universal_coa_name",
+            "mapping_type", "mapping_percent", "condition_rule",
+            "required_dimension", "effective_from", "effective_to",
+            "review_status", "approved_by", "notes", "workbook_metadata",
+            "created_at", "updated_at",
+        )
+        read_only_fields = (
+            "id", "coa_definition_code", "account_code", "created_at", "updated_at",
+        )
+
+    def get_coa_definition_code(self, obj):
+        return obj.coa_definition.coa_id if obj.coa_definition_id else None
+
+    def get_account_code(self, obj):
+        return obj.account.code if obj.account_id else None
+
+
+class DimensionTypeSerializer(serializers.ModelSerializer):
+    value_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DimensionType
+        fields = (
+            "id", "code", "name", "description", "applies_to",
+            "mandatory_flag", "multi_select_allowed", "master_data_owner",
+            "hierarchy_allowed", "active_flag", "notes", "workbook_metadata",
+            "value_count", "created_at", "updated_at",
+        )
+        read_only_fields = ("id", "value_count", "created_at", "updated_at")
+
+    def get_value_count(self, obj):
+        return obj.values.count()
+
+
+class DimensionValueSerializer(serializers.ModelSerializer):
+    dimension_type_code = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DimensionValue
+        fields = (
+            "id", "dimension_type", "dimension_type_code", "code", "name",
+            "parent_value_code", "description", "active_flag",
+            "effective_from", "effective_to", "external_reference", "notes",
+            "workbook_metadata", "created_at", "updated_at",
+        )
+        read_only_fields = ("id", "dimension_type_code", "created_at", "updated_at")
+
+    def get_dimension_type_code(self, obj):
+        return obj.dimension_type.code if obj.dimension_type_id else None
+
+
+class ControlledListEntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ControlledListEntry
+        fields = (
+            "id", "list_name", "list_code", "list_value", "display_order",
+            "active_flag", "description", "notes", "created_at", "updated_at",
+        )
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class DimensionValidationRuleSerializer(serializers.ModelSerializer):
+    coa_definition_code = serializers.SerializerMethodField()
+    account_code = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DimensionValidationRule
+        fields = (
+            "id", "rule_id", "coa_definition", "coa_definition_code",
+            "account", "account_code", "account_no", "account_name",
+            "rule_type", "trigger_event", "required_dimension_type_codes",
+            "optional_dimension_type_codes", "conditional_dimension_type_codes",
+            "condition_expression", "validation_error_message", "severity",
+            "master_driver", "active_flag", "effective_from", "effective_to",
+            "notes", "workbook_metadata", "created_at", "updated_at",
+        )
+        read_only_fields = (
+            "id", "coa_definition_code", "account_code", "created_at", "updated_at",
+        )
+
+    def get_coa_definition_code(self, obj):
+        return obj.coa_definition.coa_id if obj.coa_definition_id else None
+
+    def get_account_code(self, obj):
+        return obj.account.code if obj.account_id else None
 
 
 class CustomAccountSubtypeSerializer(serializers.ModelSerializer):
@@ -510,8 +623,33 @@ class JournalLineSerializer(serializers.ModelSerializer):
         return obj.counterparty_entity.code if obj.counterparty_entity_id else None
 
 
+class _DimensionInputSerializer(serializers.Serializer):
+    """One element of a JE line's structured ``dimensions`` array.
+
+    Wire shape: ``{"type_code": "BANK", "value_id": 42}``.
+
+    Resolved at the viewset layer (it has ``request.organization``) into
+    the corresponding flat ``dimension_*_code`` column. Cross-org values,
+    type/value mismatches, and duplicate type codes are rejected there.
+    """
+    type_code = serializers.CharField(max_length=30)
+    value_id = serializers.IntegerField()
+
+
 class JournalLineInputSerializer(serializers.Serializer):
-    """Shape accepted by JournalService.create_draft() / replace_lines()."""
+    """Shape accepted by JournalService.create_draft() / replace_lines().
+
+    Two ways to specify dimensions per line — both supported, both
+    eventually map to the 7 flat ``dimension_*_code`` columns:
+
+    1. Structured array: ``"dimensions": [{"type_code": "BANK",
+       "value_id": 42}, …]`` — preferred, resolved at the viewset.
+    2. Flat strings: ``"dimension_bank_code": "BANK_A"`` etc. — kept for
+       backwards-compatibility with existing callers and the AI drafter.
+
+    Mixing them is allowed; the viewset-resolved structured entries
+    overwrite any flat string for the same column.
+    """
     account_id = serializers.IntegerField()
     description = serializers.CharField(required=False, allow_blank=True, default="")
     debit = serializers.DecimalField(max_digits=19, decimal_places=4, default=Decimal("0"))
@@ -521,6 +659,7 @@ class JournalLineInputSerializer(serializers.Serializer):
         max_digits=20, decimal_places=10, required=False,
     )
     counterparty_entity_id = serializers.IntegerField(required=False, allow_null=True)
+    dimensions = _DimensionInputSerializer(many=True, required=False, default=list)
     dimension_bank_code = serializers.CharField(required=False, allow_blank=True, max_length=50)
     dimension_custodian_code = serializers.CharField(required=False, allow_blank=True, max_length=50)
     dimension_portfolio_code = serializers.CharField(required=False, allow_blank=True, max_length=50)
@@ -639,6 +778,8 @@ class JournalEntryDetailSerializer(JournalEntrySummarySerializer):
             "suggested_account_reasoning": md.get("suggested_account_reasoning"),
             "accounting_standard_reasoning": md.get("accounting_standard_reasoning"),
             "entity_accounting_standard": md.get("entity_accounting_standard"),
+            "service_period_start": md.get("service_period_start"),
+            "service_period_end": md.get("service_period_end"),
             "warnings": md.get("warnings") or [],
         }
 
@@ -679,3 +820,262 @@ class JournalEntryRejectSerializer(serializers.Serializer):
 class PeriodCloseSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=["soft_close", "closed"], default="closed")
     note = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+# ── Master tables (workbook tabs 07–17) ─────────────────────────────────────
+
+class TaxLotSerializer(serializers.ModelSerializer):
+    """Workbook tab `17_Tax_Lot_Master` — one row per identifiable acquisition lot."""
+
+    account_code = serializers.CharField(source="account.code", read_only=True)
+    account_name = serializers.CharField(source="account.name", read_only=True)
+
+    class Meta:
+        model = TaxLot
+        fields = (
+            "id",
+            "tax_lot_id",
+            "instrument_code",
+            "portfolio_code",
+            "custodian_code",
+            "account",
+            "account_code",
+            "account_name",
+            "account_no",
+            "lot_open_date",
+            "acquisition_trade_date",
+            "settlement_date",
+            "original_quantity",
+            "remaining_quantity",
+            "unit_of_measure",
+            "acquisition_price_per_unit",
+            "acquisition_currency",
+            "acquisition_fx_rate_to_reporting",
+            "acquisition_cost_transaction_ccy",
+            "acquisition_cost_reporting_ccy",
+            "cost_basis_method",
+            "lot_status",
+            "disposal_date",
+            "disposed_quantity",
+            "cumulative_disposed_quantity",
+            "remaining_cost_reporting_ccy",
+            "realized_gain_loss_reporting_ccy",
+            "wash_sale_flag",
+            "corporate_action_adjusted_flag",
+            "active_flag",
+            "source_transaction_reference",
+            "source_document_reference",
+            "notes",
+            "workbook_metadata",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "account_code", "account_name", "created_at", "updated_at")
+
+
+class LoanSerializer(serializers.ModelSerializer):
+    """Workbook tab `07 Loan Master` — one row per governed loan agreement."""
+
+    default_principal_account_display = serializers.SerializerMethodField()
+    default_interest_income_account_display = serializers.SerializerMethodField()
+    default_interest_expense_account_display = serializers.SerializerMethodField()
+    default_fx_gain_loss_account_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Loan
+        fields = (
+            "id",
+            "loan_id", "loan_name", "loan_type", "loan_side", "status",
+            "borrower_or_lender_code", "related_party_flag",
+            "facility_reference", "internal_reference",
+            "loan_currency", "principal_original",
+            "current_principal_outstanding",
+            "interest_rate_type", "fixed_rate", "reference_rate_code",
+            "spread_bps",
+            "interest_reset_frequency", "interest_payment_frequency",
+            "day_count_convention",
+            "start_date", "first_accrual_date", "maturity_date",
+            "next_reset_date", "next_interest_payment_date",
+            "next_principal_payment_date",
+            "effective_from", "effective_to",
+            "repayment_type", "amortization_method", "bullet_flag",
+            "scheduled_principal_amount",
+            "prepayment_allowed_flag", "capitalized_interest_flag",
+            "reporting_portfolio_code",
+            "collateral_link_type", "collateral_link_id",
+            "current_noncurrent_split_method",
+            "valuation_basis", "impairment_method",
+            "accrual_required_flag", "fx_remeasure_flag",
+            "default_principal_account_code", "default_principal_account",
+            "default_principal_account_display",
+            "default_interest_income_account_code",
+            "default_interest_income_account",
+            "default_interest_income_account_display",
+            "default_interest_expense_account_code",
+            "default_interest_expense_account",
+            "default_interest_expense_account_display",
+            "default_fx_gain_loss_account_code",
+            "default_fx_gain_loss_account",
+            "default_fx_gain_loss_account_display",
+            "approval_required_flag", "manual_override_allowed_flag",
+            "source_document_required_flag",
+            "notes", "workbook_metadata",
+            "created_at", "updated_at",
+        )
+        read_only_fields = (
+            "id",
+            "default_principal_account_display",
+            "default_interest_income_account_display",
+            "default_interest_expense_account_display",
+            "default_fx_gain_loss_account_display",
+            "created_at", "updated_at",
+        )
+
+    def _account_display(self, account):
+        if not account:
+            return None
+        return {"id": account.id, "code": account.code, "name": account.name}
+
+    def get_default_principal_account_display(self, obj):
+        return self._account_display(obj.default_principal_account)
+
+    def get_default_interest_income_account_display(self, obj):
+        return self._account_display(obj.default_interest_income_account)
+
+    def get_default_interest_expense_account_display(self, obj):
+        return self._account_display(obj.default_interest_expense_account)
+
+    def get_default_fx_gain_loss_account_display(self, obj):
+        return self._account_display(obj.default_fx_gain_loss_account)
+
+
+class InstrumentSerializer(serializers.ModelSerializer):
+    """Workbook tab `08 Instrument Master` — one row per governed investment."""
+
+    loan_display = serializers.SerializerMethodField()
+    default_principal_account_display = serializers.SerializerMethodField()
+    default_income_account_display = serializers.SerializerMethodField()
+    default_expense_account_display = serializers.SerializerMethodField()
+    default_realized_gl_account_display = serializers.SerializerMethodField()
+    default_unrealized_gl_account_display = serializers.SerializerMethodField()
+    default_fx_gl_account_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Instrument
+        fields = (
+            "id",
+            "instrument_id", "instrument_name", "instrument_type",
+            "quoted_unquoted_flag",
+            "asset_class_code", "strategy_code",
+            "portfolio_default", "custodian_default",
+            "issuer_or_counterparty_code", "related_party_flag",
+            "isin_or_ticker", "internal_reference",
+            "currency", "jurisdiction_code", "domicile_code",
+            "commitment_flag", "commitment_code",
+            "loan_linked_flag", "loan_workbook_id", "loan", "loan_display",
+            "tax_lot_required",
+            "income_type", "income_frequency",
+            "valuation_method", "price_source",
+            "fx_exposure_flag", "impairment_method",
+            "esg_or_restriction_flag", "restriction_type_code",
+            "inception_date", "maturity_date",
+            "settlement_cycle", "day_count_convention",
+            "performance_group", "report_category_code",
+            "default_principal_account_code", "default_principal_account",
+            "default_principal_account_display",
+            "default_income_account_code", "default_income_account",
+            "default_income_account_display",
+            "default_expense_account_code", "default_expense_account",
+            "default_expense_account_display",
+            "default_realized_gl_account_code", "default_realized_gl_account",
+            "default_realized_gl_account_display",
+            "default_unrealized_gl_account_code", "default_unrealized_gl_account",
+            "default_unrealized_gl_account_display",
+            "default_fx_gl_account_code", "default_fx_gl_account",
+            "default_fx_gl_account_display",
+            "status", "effective_from", "effective_to",
+            "notes", "workbook_metadata",
+            "created_at", "updated_at",
+        )
+        read_only_fields = (
+            "id",
+            "loan_display",
+            "default_principal_account_display",
+            "default_income_account_display",
+            "default_expense_account_display",
+            "default_realized_gl_account_display",
+            "default_unrealized_gl_account_display",
+            "default_fx_gl_account_display",
+            "created_at", "updated_at",
+        )
+
+    def _account_display(self, account):
+        if not account:
+            return None
+        return {"id": account.id, "code": account.code, "name": account.name}
+
+    def get_loan_display(self, obj):
+        if not obj.loan_id:
+            return None
+        return {
+            "pk": obj.loan_id,
+            "loan_id": obj.loan.loan_id,
+            "loan_type": obj.loan.loan_type,
+        }
+
+    def get_default_principal_account_display(self, obj):
+        return self._account_display(obj.default_principal_account)
+
+    def get_default_income_account_display(self, obj):
+        return self._account_display(obj.default_income_account)
+
+    def get_default_expense_account_display(self, obj):
+        return self._account_display(obj.default_expense_account)
+
+    def get_default_realized_gl_account_display(self, obj):
+        return self._account_display(obj.default_realized_gl_account)
+
+    def get_default_unrealized_gl_account_display(self, obj):
+        return self._account_display(obj.default_unrealized_gl_account)
+
+    def get_default_fx_gl_account_display(self, obj):
+        return self._account_display(obj.default_fx_gl_account)
+
+
+class PortfolioSerializer(serializers.ModelSerializer):
+    """Workbook tab `14_Portfolio_Master` — reporting / strategy bucket."""
+
+    parent_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Portfolio
+        fields = (
+            "id",
+            "portfolio_id", "portfolio_name", "short_name",
+            "portfolio_type", "portfolio_subtype",
+            "owner_type", "owner_id", "primary_related_party_id",
+            "linked_custodian_id",
+            "base_currency", "reporting_currency",
+            "country_code", "jurisdiction_code",
+            "strategy_code", "asset_allocation_profile",
+            "discretionary_flag", "consolidation_flag",
+            "net_worth_inclusion_flag", "performance_report_flag",
+            "posting_allowed_flag",
+            "status", "active_flag",
+            "open_date", "close_date",
+            "parent_portfolio_workbook_id", "parent", "parent_display",
+            "reporting_group",
+            "approval_required_flag", "source_document_required_flag",
+            "notes", "workbook_metadata",
+            "created_at", "updated_at",
+        )
+        read_only_fields = ("id", "parent_display", "created_at", "updated_at")
+
+    def get_parent_display(self, obj):
+        if not obj.parent_id:
+            return None
+        return {
+            "pk": obj.parent_id,
+            "portfolio_id": obj.parent.portfolio_id,
+            "portfolio_name": obj.parent.portfolio_name,
+        }

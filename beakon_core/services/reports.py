@@ -56,7 +56,7 @@ ZERO = Decimal("0")
 #   - OR within each type code (Django `__in` lookup)
 # Default behaviour (None or empty dict) returns the queryset unchanged so
 # every existing call site stays byte-identical.
-_DIMENSION_COLUMN = {
+DIMENSION_COLUMN = {
     "BANK": "dimension_bank_code",
     "CUST": "dimension_custodian_code",
     "PORT": "dimension_portfolio_code",
@@ -78,11 +78,11 @@ def _apply_dimension_filter(qs, dimension_filter):
     if not dimension_filter:
         return qs
     for type_code, value_codes in dimension_filter.items():
-        column = _DIMENSION_COLUMN.get(type_code)
+        column = DIMENSION_COLUMN.get(type_code)
         if column is None:
             raise ValueError(
                 f"Unknown dimension type code '{type_code}'. "
-                f"Valid codes: {sorted(_DIMENSION_COLUMN)}"
+                f"Valid codes: {sorted(DIMENSION_COLUMN)}"
             )
         qs = qs.filter(**{f"{column}__in": list(value_codes)})
     return qs

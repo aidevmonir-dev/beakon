@@ -13,6 +13,14 @@ from api.views.beakon import (
     EntityTypeDeleteView,
     CoADefinitionViewSet,
     AccountViewSet,
+    CoAMappingViewSet,
+    ControlledListEntryViewSet,
+    DimensionTypeViewSet,
+    DimensionValueViewSet,
+    DimensionValidationRuleViewSet,
+    InstrumentViewSet,
+    LoanViewSet,
+    TaxLotViewSet,
     AIBillDraftStreamView,
     AIBillDraftView,
     ApprovalActionListView,
@@ -57,6 +65,11 @@ router.register(r"entities", EntityViewSet, basename="beakon-entity")
 router.register(r"account-groups", AccountGroupViewSet, basename="beakon-account-group")
 router.register(r"coa-definitions", CoADefinitionViewSet, basename="beakon-coa-definition")
 router.register(r"accounts", AccountViewSet, basename="beakon-account")
+router.register(r"coa-mappings", CoAMappingViewSet, basename="beakon-coa-mapping")
+router.register(r"dimension-types", DimensionTypeViewSet, basename="beakon-dimension-type")
+router.register(r"dimension-values", DimensionValueViewSet, basename="beakon-dimension-value")
+router.register(r"controlled-lists", ControlledListEntryViewSet, basename="beakon-controlled-list")
+router.register(r"dimension-validation-rules", DimensionValidationRuleViewSet, basename="beakon-dimension-rule")
 router.register(r"periods", PeriodViewSet, basename="beakon-period")
 router.register(r"intercompany-groups", IntercompanyGroupViewSet, basename="beakon-ic-group")
 router.register(r"vendors", VendorViewSet, basename="beakon-vendor")
@@ -66,6 +79,9 @@ router.register(r"invoices", InvoiceViewSet, basename="beakon-invoice")
 router.register(r"journal-entries", JournalEntryViewSet, basename="beakon-je")
 router.register(r"bank-accounts", BankAccountViewSet, basename="beakon-bank-account")
 router.register(r"bank-transactions", BankTransactionViewSet, basename="beakon-bank-txn")
+router.register(r"tax-lots", TaxLotViewSet, basename="beakon-tax-lot")
+router.register(r"loans", LoanViewSet, basename="beakon-loan")
+router.register(r"instruments", InstrumentViewSet, basename="beakon-instrument")
 
 
 urlpatterns = [
