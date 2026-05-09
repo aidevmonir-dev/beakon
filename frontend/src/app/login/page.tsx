@@ -42,12 +42,17 @@ export default function LoginPage() {
           <Logo variant="horizontal" size={36} />
         </Link>
 
-        <p className="text-sm text-slate-500">
-          Need an account?{" "}
-          <Link href="/register" className="font-semibold text-brand-700 transition hover:text-brand-900">
-            Sign Up
+        <div className="flex items-center gap-6 text-sm text-slate-500">
+          <Link href="/pricing" className="hidden font-medium text-slate-600 transition hover:text-brand-800 sm:inline">
+            Pricing
           </Link>
-        </p>
+          <p>
+            Need an account?{" "}
+            <Link href="/register" className="font-semibold text-brand-700 transition hover:text-brand-900">
+              Sign Up
+            </Link>
+          </p>
+        </div>
       </header>
 
       <main className="relative z-10 flex min-h-[calc(100vh-8rem)] items-center justify-center px-4 pb-20">

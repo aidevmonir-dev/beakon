@@ -18,11 +18,20 @@ from api.views.beakon import (
     DimensionTypeViewSet,
     DimensionValueViewSet,
     DimensionValidationRuleViewSet,
+    BankAccountMasterViewSet,
+    CounterpartyViewSet,
+    CustodianViewSet,
     InstrumentViewSet,
     LoanViewSet,
+    PolicyViewSet,
+    PortfolioViewSet,
+    PropertyViewSet,
+    RelatedPartyViewSet,
     TaxLotViewSet,
     AIBillDraftStreamView,
     AIBillDraftView,
+    OCRExtractStreamView,
+    OCRExtractInvoiceStreamView,
     ApprovalActionListView,
     AnomaliesView,
     AskBeakonView,
@@ -32,11 +41,16 @@ from api.views.beakon import (
     CustomerViewSet,
     EntityViewSet,
     FXRateListCreateView,
+    FXRateSyncECBView,
     FXRevaluationView,
     IntercompanyGroupViewSet,
+    BillDocumentListView,
+    InvoiceDocumentListView,
     InvoiceViewSet,
+    JournalEntryDocumentListView,
     JournalEntryViewSet,
     PeriodViewSet,
+    SourceDocumentDetailView,
     VendorViewSet,
 )
 from api.views.beakon_reports import (
@@ -57,6 +71,24 @@ from api.views.beakon_banking import (
     BankTransactionViewSet,
     FeedImportDetailView,
     FeedImportListView,
+    MLBankCategorizerStatusView,
+    MLBankCategorizerTrainView,
+)
+from api.views.beakon_dashboard import CashTrendView
+from api.views.beakon_extras import (
+    AICoAImportCommitView,
+    AICoAImportPreviewView,
+    CommitmentViewSet,
+    CreateDisbursementInvoiceView,
+    PendingRebillablesSummaryView,
+    PendingRebillablesView,
+    PensionViewSet,
+    RecognitionRuleViewSet,
+    RunClosingEntriesView,
+    TaxCodeViewSet,
+    VATReportView,
+    WorkbookImplementationView,
+    WorkflowDiagramView,
 )
 
 
@@ -82,23 +114,58 @@ router.register(r"bank-transactions", BankTransactionViewSet, basename="beakon-b
 router.register(r"tax-lots", TaxLotViewSet, basename="beakon-tax-lot")
 router.register(r"loans", LoanViewSet, basename="beakon-loan")
 router.register(r"instruments", InstrumentViewSet, basename="beakon-instrument")
+router.register(r"portfolios", PortfolioViewSet, basename="beakon-portfolio")
+router.register(r"custodians", CustodianViewSet, basename="beakon-custodian")
+router.register(r"related-parties", RelatedPartyViewSet, basename="beakon-related-party")
+router.register(r"counterparties", CounterpartyViewSet, basename="beakon-counterparty")
+router.register(r"bank-account-masters", BankAccountMasterViewSet, basename="beakon-bank-account-master")
+router.register(r"properties", PropertyViewSet, basename="beakon-property")
+router.register(r"policies", PolicyViewSet, basename="beakon-policy")
+router.register(r"tax-codes", TaxCodeViewSet, basename="beakon-tax-code")
+router.register(r"recognition-rules", RecognitionRuleViewSet,
+                basename="beakon-recognition-rule")
+router.register(r"pensions", PensionViewSet, basename="beakon-pension")
+router.register(r"commitments", CommitmentViewSet, basename="beakon-commitment")
 
 
 urlpatterns = [
     # Reference data
     path("currencies/", CurrencyListView.as_view(), name="beakon-currencies"),
     path("fx-rates/", FXRateListCreateView.as_view(), name="beakon-fx-rates"),
+    path("fx-rates/sync-ecb/", FXRateSyncECBView.as_view(), name="beakon-fx-rates-sync-ecb"),
     path("fx-revaluation/", FXRevaluationView.as_view(), name="beakon-fx-revaluation"),
     # AI / OCR
     path("ocr/draft-from-bill/", AIBillDraftView.as_view(), name="beakon-ocr-draft-bill"),
     path("ocr/draft-from-bill-stream/", AIBillDraftStreamView.as_view(),
          name="beakon-ocr-draft-bill-stream"),
+    path("ocr/extract-stream/", OCRExtractStreamView.as_view(),
+         name="beakon-ocr-extract-stream"),
+    path("ocr/extract-invoice-stream/", OCRExtractInvoiceStreamView.as_view(),
+         name="beakon-ocr-extract-invoice-stream"),
+    path("ai/coa-import/preview/", AICoAImportPreviewView.as_view(),
+         name="beakon-ai-coa-import-preview"),
+    path("ai/coa-import/commit/", AICoAImportCommitView.as_view(),
+         name="beakon-ai-coa-import-commit"),
     path("ask/", AskBeakonView.as_view(), name="beakon-ask"),
     path("narrative/", ReportNarrativeView.as_view(), name="beakon-narrative"),
     path("anomalies/", AnomaliesView.as_view(), name="beakon-anomalies"),
     # Approval audit
     path("approval-actions/", ApprovalActionListView.as_view(),
          name="beakon-approval-actions"),
+    # Source-document attachments — same row can be parented on a Bill,
+    # an Invoice, or a JournalEntry. Download/delete go through the
+    # shared SourceDocumentDetailView regardless of parent type.
+    path("journal-entries/<int:pk>/documents/",
+         JournalEntryDocumentListView.as_view(),
+         name="beakon-je-documents"),
+    path("bills/<int:pk>/documents/",
+         BillDocumentListView.as_view(),
+         name="beakon-bill-documents"),
+    path("invoices/<int:pk>/documents/",
+         InvoiceDocumentListView.as_view(),
+         name="beakon-invoice-documents"),
+    path("documents/<int:pk>/", SourceDocumentDetailView.as_view(),
+         name="beakon-document-detail"),
     # Reports
     path("reports/trial-balance/", TrialBalanceView.as_view(),
          name="beakon-report-tb"),
@@ -107,6 +174,7 @@ urlpatterns = [
     path("reports/balance-sheet/", BalanceSheetView.as_view(),
          name="beakon-report-bs"),
     path("reports/cash-flow/", CashFlowView.as_view(), name="beakon-report-cf"),
+    path("reports/cash-trend/", CashTrendView.as_view(), name="beakon-report-cash-trend"),
     path("reports/journal-listing/", JournalListingView.as_view(),
          name="beakon-report-journal-listing"),
     path("reports/lines-listing/", LinesListingView.as_view(),
@@ -130,6 +198,29 @@ urlpatterns = [
     # Banking feeder
     path("feed-imports/", FeedImportListView.as_view(), name="beakon-feed-imports"),
     path("feed-imports/<int:pk>/", FeedImportDetailView.as_view(), name="beakon-feed-import-detail"),
+    # On-device ML bank categoriser (replaces LLM for confident picks)
+    path("ml/bank-categorizer/train/", MLBankCategorizerTrainView.as_view(),
+         name="beakon-ml-bank-categorizer-train"),
+    path("ml/bank-categorizer/status/", MLBankCategorizerStatusView.as_view(),
+         name="beakon-ml-bank-categorizer-status"),
+    # Disbursements / rebillables
+    path("disbursements/pending/", PendingRebillablesView.as_view(),
+         name="beakon-disbursement-pending"),
+    path("disbursements/summary/", PendingRebillablesSummaryView.as_view(),
+         name="beakon-disbursement-summary"),
+    path("disbursements/create-invoice/", CreateDisbursementInvoiceView.as_view(),
+         name="beakon-disbursement-create-invoice"),
+    # Period closing entries
+    path("periods/<int:pk>/run-closing-entries/", RunClosingEntriesView.as_view(),
+         name="beakon-period-run-closing-entries"),
+    # VAT report
+    path("reports/vat/", VATReportView.as_view(), name="beakon-vat-report"),
+    # Workbook → DB implementation evidence
+    path("workbook-implementation/", WorkbookImplementationView.as_view(),
+         name="beakon-workbook-implementation"),
+    # Editable Mermaid workflow diagrams
+    path("workflow-diagrams/<str:code>/", WorkflowDiagramView.as_view(),
+         name="beakon-workflow-diagram"),
 ]
 
 urlpatterns += router.urls

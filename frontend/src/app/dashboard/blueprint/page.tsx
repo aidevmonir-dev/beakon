@@ -289,9 +289,14 @@ export default function BlueprintPage() {
           </div>
         }
         actions={
-          <Link href="/dashboard/tour" className="btn-secondary">
-            View Live Product
-          </Link>
+          <div className="flex gap-2">
+            <Link href="/dashboard/blueprint/implementation" className="btn-primary">
+              Workbook → DB evidence
+            </Link>
+            <Link href="/dashboard/tour" className="btn-secondary">
+              View Live Product
+            </Link>
+          </div>
         }
       />
 

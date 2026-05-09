@@ -29,15 +29,22 @@ from beakon_core.models import (
     IntercompanyGroup,
     Invoice,
     InvoiceLine,
+    BankAccountMaster,
+    Counterparty,
+    Custodian,
     Instrument,
     JournalEntry,
     JournalLine,
     Loan,
     Period,
+    Policy,
     Portfolio,
+    Property,
+    RelatedParty,
     TaxLot,
     Vendor,
 )
+from beakon_core.models.documents import SourceDocument
 
 
 # ── Reference data ──────────────────────────────────────────────────────────
@@ -361,12 +368,17 @@ class CustomerSerializer(serializers.ModelSerializer):
 class BillLineSerializer(serializers.ModelSerializer):
     expense_account_code = serializers.SerializerMethodField()
     expense_account_name = serializers.SerializerMethodField()
+    tax_code_label = serializers.SerializerMethodField()
+    tax_code_rate = serializers.SerializerMethodField()
 
     class Meta:
         model = BillLine
         fields = ("id", "expense_account", "expense_account_code", "expense_account_name",
-                  "description", "quantity", "unit_price", "amount", "line_order")
-        read_only_fields = ("id", "expense_account_code", "expense_account_name")
+                  "description", "quantity", "unit_price", "amount",
+                  "tax_code", "tax_code_label", "tax_code_rate", "tax_amount",
+                  "line_order")
+        read_only_fields = ("id", "expense_account_code", "expense_account_name",
+                            "tax_code_label", "tax_code_rate")
 
     def get_expense_account_code(self, obj):
         return obj.expense_account.code
@@ -374,11 +386,18 @@ class BillLineSerializer(serializers.ModelSerializer):
     def get_expense_account_name(self, obj):
         return obj.expense_account.name
 
+    def get_tax_code_label(self, obj):
+        return obj.tax_code.name if obj.tax_code_id else None
+
+    def get_tax_code_rate(self, obj):
+        return str(obj.tax_code.rate) if obj.tax_code_id else None
+
 
 class BillSummarySerializer(serializers.ModelSerializer):
     entity_code = serializers.SerializerMethodField()
     vendor_code = serializers.SerializerMethodField()
     vendor_name = serializers.SerializerMethodField()
+    was_ai_extracted = serializers.SerializerMethodField()
 
     class Meta:
         model = Bill
@@ -389,7 +408,7 @@ class BillSummarySerializer(serializers.ModelSerializer):
             "subtotal", "tax_amount", "total",
             "status",
             "accrual_journal_entry", "payment_journal_entry",
-            "payment_date",
+            "payment_date", "was_ai_extracted",
             "created_at", "updated_at",
         )
         read_only_fields = fields
@@ -403,6 +422,13 @@ class BillSummarySerializer(serializers.ModelSerializer):
     def get_vendor_name(self, obj):
         return obj.vendor.name
 
+    def get_was_ai_extracted(self, obj):
+        # The Bills page tags AI-prefilled drafts with a ``[AI-EXTRACTED:<model>]``
+        # prefix in ``notes``. List rendering uses this to show a ✨ icon so a
+        # reviewer can tell at a glance which bills came from a receipt vs.
+        # manual entry. Cheap, no extra queries — just a string prefix check.
+        return bool(obj.notes and obj.notes.startswith("[AI-EXTRACTED:"))
+
 
 class BillDetailSerializer(BillSummarySerializer):
     lines = BillLineSerializer(many=True, read_only=True)
@@ -412,7 +438,7 @@ class BillDetailSerializer(BillSummarySerializer):
 
     class Meta(BillSummarySerializer.Meta):
         fields = BillSummarySerializer.Meta.fields + (
-            "description", "notes", "lines",
+            "description", "explanation", "notes", "lines",
             "accrual_journal_entry_number", "payment_journal_entry_number",
             "payment_bank_account", "payment_bank_account_code", "payment_reference",
             "submitted_by", "submitted_at",
@@ -443,6 +469,10 @@ class BillCreateSerializer(serializers.Serializer):
     bill_number = serializers.CharField(required=False, allow_blank=True, max_length=100)
     currency = serializers.CharField(required=False, allow_blank=True, max_length=3)
     description = serializers.CharField(required=False, allow_blank=True)
+    explanation = serializers.CharField(
+        required=False, allow_blank=True,
+        help_text="Long-form rationale; propagates to JE.explanation when posted.",
+    )
     tax_amount = serializers.DecimalField(max_digits=19, decimal_places=4, required=False)
     lines = serializers.ListField(child=serializers.DictField(), allow_empty=False)
 
@@ -462,18 +492,29 @@ class BillRejectSerializer(serializers.Serializer):
 class InvoiceLineSerializer(serializers.ModelSerializer):
     revenue_account_code = serializers.SerializerMethodField()
     revenue_account_name = serializers.SerializerMethodField()
+    tax_code_label = serializers.SerializerMethodField()
+    tax_code_rate = serializers.SerializerMethodField()
 
     class Meta:
         model = InvoiceLine
         fields = ("id", "revenue_account", "revenue_account_code", "revenue_account_name",
-                  "description", "quantity", "unit_price", "amount", "line_order")
-        read_only_fields = ("id", "revenue_account_code", "revenue_account_name")
+                  "description", "quantity", "unit_price", "amount",
+                  "tax_code", "tax_code_label", "tax_code_rate", "tax_amount",
+                  "line_order")
+        read_only_fields = ("id", "revenue_account_code", "revenue_account_name",
+                            "tax_code_label", "tax_code_rate")
 
     def get_revenue_account_code(self, obj):
         return obj.revenue_account.code
 
     def get_revenue_account_name(self, obj):
         return obj.revenue_account.name
+
+    def get_tax_code_label(self, obj):
+        return obj.tax_code.name if obj.tax_code_id else None
+
+    def get_tax_code_rate(self, obj):
+        return str(obj.tax_code.rate) if obj.tax_code_id else None
 
 
 class InvoiceSummarySerializer(serializers.ModelSerializer):
@@ -513,7 +554,7 @@ class InvoiceDetailSerializer(InvoiceSummarySerializer):
 
     class Meta(InvoiceSummarySerializer.Meta):
         fields = InvoiceSummarySerializer.Meta.fields + (
-            "description", "notes", "lines",
+            "description", "explanation", "notes", "lines",
             "issued_journal_entry_number", "payment_journal_entry_number",
             "payment_bank_account", "payment_bank_account_code", "payment_reference",
             "submitted_by", "submitted_at",
@@ -544,6 +585,10 @@ class InvoiceCreateSerializer(serializers.Serializer):
     invoice_number = serializers.CharField(required=False, allow_blank=True, max_length=100)
     currency = serializers.CharField(required=False, allow_blank=True, max_length=3)
     description = serializers.CharField(required=False, allow_blank=True)
+    explanation = serializers.CharField(
+        required=False, allow_blank=True,
+        help_text="Long-form rationale; propagates to JE.explanation when issued.",
+    )
     tax_amount = serializers.DecimalField(max_digits=19, decimal_places=4, required=False)
     lines = serializers.ListField(child=serializers.DictField(), allow_empty=False)
 
@@ -594,6 +639,11 @@ class JournalLineSerializer(serializers.ModelSerializer):
     account_code = serializers.SerializerMethodField()
     account_name = serializers.SerializerMethodField()
     counterparty_entity_code = serializers.SerializerMethodField()
+    # Dimensions block — ALL dimensions populated on the line, in display
+    # form. The frontend renders this as a chip strip per line. FK-backed
+    # dimensions resolve to a human-readable label so the user doesn't see
+    # bare ids; code-only dimensions pass through verbatim.
+    dimensions_display = serializers.SerializerMethodField()
 
     class Meta:
         model = JournalLine
@@ -606,11 +656,12 @@ class JournalLineSerializer(serializers.ModelSerializer):
             "dimension_portfolio_code", "dimension_instrument_code",
             "dimension_strategy_code", "dimension_asset_class_code",
             "dimension_maturity_code",
+            "dimensions_display",
             "line_order",
         )
         read_only_fields = (
             "id", "account_code", "account_name", "counterparty_entity_code",
-            "functional_debit", "functional_credit",
+            "functional_debit", "functional_credit", "dimensions_display",
         )
 
     def get_account_code(self, obj):
@@ -621,6 +672,81 @@ class JournalLineSerializer(serializers.ModelSerializer):
 
     def get_counterparty_entity_code(self, obj):
         return obj.counterparty_entity.code if obj.counterparty_entity_id else None
+
+    def get_dimensions_display(self, obj):
+        """List of {type, value, label} per non-empty dimension on the line.
+
+        ``type`` is the dimension type code (BANK, PORT, CP, …) — the
+        frontend uses it for color coding. ``value`` is the raw code or
+        FK id. ``label`` is the human-friendly text (master record name
+        for FK dimensions; bare code for code-only dimensions)."""
+        out: list[dict] = []
+
+        def _add(type_code: str, value: str, label: str) -> None:
+            if value:
+                out.append({"type": type_code, "value": value, "label": label})
+
+        # Code-only / Tier-1
+        _add("BANK", obj.dimension_bank_code, obj.dimension_bank_code)
+        _add("CUST", obj.dimension_custodian_code, obj.dimension_custodian_code)
+        _add("PORT", obj.dimension_portfolio_code, obj.dimension_portfolio_code)
+        _add("INST", obj.dimension_instrument_code, obj.dimension_instrument_code)
+        _add("STR",  obj.dimension_strategy_code, obj.dimension_strategy_code)
+        _add("ACL",  obj.dimension_asset_class_code, obj.dimension_asset_class_code)
+        _add("MAT",  obj.dimension_maturity_code, obj.dimension_maturity_code)
+
+        # Tier-2 code-only
+        _add("TRF",  obj.dimension_transfer_type_code, obj.dimension_transfer_type_code)
+        _add("JUR",  obj.dimension_jurisdiction_code, obj.dimension_jurisdiction_code)
+        _add("COM",  obj.dimension_commitment_code, obj.dimension_commitment_code)
+        _add("WAL",  obj.dimension_wallet_code, obj.dimension_wallet_code)
+        _add("RCAT", obj.dimension_report_category_code, obj.dimension_report_category_code)
+        _add("RST",  obj.dimension_restriction_type_code, obj.dimension_restriction_type_code)
+
+        # FK-backed — resolve a human label off the related row
+        if obj.dimension_counterparty_id:
+            cp = obj.dimension_counterparty
+            _add("CP", str(cp.counterparty_id or cp.id),
+                 getattr(cp, "short_name", "") or getattr(cp, "counterparty_id", "") or f"CP#{cp.id}")
+        if obj.dimension_related_party_id:
+            rp = obj.dimension_related_party
+            _add("RP", str(getattr(rp, "related_party_id", "") or rp.id),
+                 getattr(rp, "short_name", "") or getattr(rp, "related_party_id", "") or f"RP#{rp.id}")
+        if obj.dimension_family_member_id:
+            fm = obj.dimension_family_member
+            _add("FAM", str(getattr(fm, "related_party_id", "") or fm.id),
+                 getattr(fm, "short_name", "") or getattr(fm, "related_party_id", "") or f"FAM#{fm.id}")
+        if obj.dimension_loan_id:
+            ln = obj.dimension_loan
+            _add("LOAN", str(getattr(ln, "loan_id", "") or ln.id),
+                 getattr(ln, "short_name", "") or getattr(ln, "loan_id", "") or f"LOAN#{ln.id}")
+        if obj.dimension_property_id:
+            pr = obj.dimension_property
+            _add("PROP", str(getattr(pr, "property_id", "") or pr.id),
+                 getattr(pr, "short_name", "") or getattr(pr, "property_id", "") or f"PROP#{pr.id}")
+        if obj.dimension_policy_id:
+            po = obj.dimension_policy
+            _add("POL", str(getattr(po, "policy_id", "") or po.id),
+                 getattr(po, "short_name", "") or getattr(po, "policy_id", "") or f"POL#{po.id}")
+        if obj.dimension_pension_id:
+            pn = obj.dimension_pension
+            _add("PEN", str(getattr(pn, "pension_id", "") or pn.id),
+                 getattr(pn, "short_name", "") or getattr(pn, "pension_id", "") or f"PEN#{pn.id}")
+        if obj.dimension_commitment_id:
+            cm = obj.dimension_commitment
+            # COM (code) and the FK both populate the COM dimension; if both
+            # were set the FK overrides.
+            out = [d for d in out if d["type"] != "COM"]
+            _add("COM", str(getattr(cm, "commitment_id", "") or cm.id),
+                 getattr(cm, "short_name", "") or getattr(cm, "commitment_id", "") or f"COM#{cm.id}")
+        if obj.dimension_tax_lot_id:
+            tl = obj.dimension_tax_lot
+            _add("TLOT", str(tl.id), f"TaxLot#{tl.id}")
+        if obj.counterparty_entity_id:
+            _add("ENT", obj.counterparty_entity.code,
+                 obj.counterparty_entity.code)
+
+        return out
 
 
 class _DimensionInputSerializer(serializers.Serializer):
@@ -679,20 +805,28 @@ class JournalEntrySummarySerializer(serializers.ModelSerializer):
     vendor_name = serializers.SerializerMethodField()
     customer_code = serializers.SerializerMethodField()
     customer_name = serializers.SerializerMethodField()
+    document_count = serializers.SerializerMethodField()
 
     class Meta:
         model = JournalEntry
         fields = (
             "id", "entry_number", "entity", "entity_code", "date",
-            "status", "source_type", "source_ref", "memo",
+            "status", "source_type", "source_ref", "memo", "explanation",
             "currency", "total_debit_functional", "total_credit_functional",
             "period", "period_name",
             "vendor", "vendor_code", "vendor_name",
             "customer", "customer_code", "customer_name",
             "created_by", "approved_by", "posted_by",
             "created_at", "updated_at",
+            "document_count",
         )
         read_only_fields = fields
+
+    def get_document_count(self, obj):
+        # Reverse FK: SourceDocument(journal_entry=...). Counts only non-soft-
+        # deleted docs so the paperclip icon in the list reflects what the
+        # user can actually open.
+        return obj.documents.filter(is_deleted=False).count()
 
     def get_entity_code(self, obj):
         return obj.entity.code
@@ -787,11 +921,41 @@ class JournalEntryDetailSerializer(JournalEntrySummarySerializer):
         return obj.reversal_of.entry_number if obj.reversal_of_id else None
 
 
+class SourceDocumentSerializer(serializers.ModelSerializer):
+    """Read shape for a Bill / Invoice / JE attachment. Download URL is
+    exposed under a dedicated endpoint instead of the raw FileField path
+    so all access goes through auth + organization scope."""
+    uploaded_by_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SourceDocument
+        fields = (
+            "id",
+            "journal_entry", "bill", "invoice",
+            "original_filename",
+            "content_hash", "content_type", "size_bytes",
+            "description",
+            "uploaded_by", "uploaded_by_email", "uploaded_at",
+            "is_deleted",
+        )
+        read_only_fields = fields
+
+    def get_uploaded_by_email(self, obj):
+        return obj.uploaded_by.email if obj.uploaded_by_id else None
+
+
 class JournalEntryCreateSerializer(serializers.Serializer):
     """Body shape for POST /journal-entries/."""
     entity_id = serializers.IntegerField()
     date = serializers.DateField()
     memo = serializers.CharField(required=False, allow_blank=True, default="")
+    explanation = serializers.CharField(
+        required=False, allow_blank=True, default="",
+        help_text=(
+            "Optional long-form rationale for the entry — why each side is "
+            "debited or credited and any auditor-facing context."
+        ),
+    )
     reference = serializers.CharField(required=False, allow_blank=True, default="")
     currency = serializers.CharField(required=False, max_length=3, default=None, allow_null=True)
     source_type = serializers.CharField(required=False, allow_blank=True)
@@ -1079,3 +1243,124 @@ class PortfolioSerializer(serializers.ModelSerializer):
             "portfolio_id": obj.parent.portfolio_id,
             "portfolio_name": obj.parent.portfolio_name,
         }
+
+
+class CustodianSerializer(serializers.ModelSerializer):
+    """Workbook tab `13_Custodian_Master` — banks, brokers, transfer agents."""
+
+    default_portfolio_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Custodian
+        fields = (
+            "id",
+            "custodian_id", "custodian_name", "short_name",
+            "custodian_type", "custodian_subtype",
+            "linked_counterparty_id",
+            "legal_entity_name", "booking_center",
+            "country_code", "jurisdiction_code",
+            "base_currency", "reporting_currency",
+            "relationship_start_date", "relationship_end_date",
+            "supports_listed_securities_flag",
+            "supports_private_assets_flag",
+            "supports_funds_flag",
+            "supports_derivatives_flag",
+            "supports_digital_assets_flag",
+            "supports_cash_sweep_flag",
+            "nominee_holding_flag",
+            "segregated_account_flag",
+            "default_portfolio_code", "default_portfolio",
+            "default_portfolio_display",
+            "status", "active_flag",
+            "posting_allowed_flag", "approval_required_flag",
+            "source_document_required_flag",
+            "notes", "workbook_metadata",
+            "created_at", "updated_at",
+        )
+        read_only_fields = (
+            "id", "default_portfolio_display", "created_at", "updated_at",
+        )
+
+    def get_default_portfolio_display(self, obj):
+        if not obj.default_portfolio_id:
+            return None
+        return {
+            "pk": obj.default_portfolio_id,
+            "portfolio_id": obj.default_portfolio.portfolio_id,
+            "portfolio_name": obj.default_portfolio.portfolio_name,
+        }
+
+
+class RelatedPartySerializer(serializers.ModelSerializer):
+    """Workbook tab `11_Related_Party_Master` — connected persons / entities."""
+
+    default_portfolio_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RelatedParty
+        fields = (
+            "id",
+            "related_party_id", "related_party_name", "short_name",
+            "related_party_type", "related_party_subtype",
+            "party_form", "relationship_to_client",
+            "ownership_percent",
+            "control_flag", "beneficiary_flag", "settlor_flag",
+            "protector_flag", "director_flag", "signer_flag",
+            "status", "active_flag",
+            "country_code", "jurisdiction_code",
+            "base_currency", "reporting_currency",
+            "tax_residence_country",
+            "related_party_since", "related_party_until",
+            "loan_eligible_flag", "distribution_eligible_flag",
+            "capital_contribution_eligible_flag",
+            "expense_allocation_eligible_flag",
+            "family_expense_eligible_flag", "net_worth_inclusion_flag",
+            "default_portfolio_code", "default_portfolio",
+            "default_portfolio_display",
+            "default_property_code", "default_bank_reference",
+            "source_document_required_flag", "approval_required_flag",
+            "notes", "workbook_metadata",
+            "created_at", "updated_at",
+        )
+        read_only_fields = (
+            "id", "default_portfolio_display", "created_at", "updated_at",
+        )
+
+    def get_default_portfolio_display(self, obj):
+        if not obj.default_portfolio_id:
+            return None
+        return {
+            "pk": obj.default_portfolio_id,
+            "portfolio_id": obj.default_portfolio.portfolio_id,
+            "portfolio_name": obj.default_portfolio.portfolio_name,
+        }
+
+
+class CounterpartySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Counterparty
+        fields = "__all__"
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class BankAccountMasterSerializer(serializers.ModelSerializer):
+    """Workbook tab `12_Bank_Account_Master` (governed bank account)."""
+
+    class Meta:
+        model = BankAccountMaster
+        fields = "__all__"
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class PropertySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Property
+        fields = "__all__"
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class PolicySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Policy
+        fields = "__all__"
+        read_only_fields = ("id", "created_at", "updated_at")

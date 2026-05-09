@@ -102,6 +102,14 @@ class Entity(models.Model):
         default=1,
         help_text="Month (1–12) in which the fiscal year starts.",
     )
+    four_eyes_posting_required = models.BooleanField(
+        default=False,
+        help_text=(
+            "When true, posting an approved JE requires a different user "
+            "than the approver (true 4-eyes per architecture PDF §9). "
+            "Default off — approve+post by same user is allowed."
+        ),
+    )
     tax_id = models.CharField(max_length=100, blank=True)
     notes = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
@@ -204,6 +212,27 @@ class CoADefinition(models.Model):
         max_length=255, blank=True,
         help_text="Comma-separated ISO currency codes, e.g. USD,EUR",
     )
+    universal_mapping_required = models.BooleanField(
+        default=False,
+        help_text="Workbook 01_CoA_Definition.Universal_Mapping_Required — when true, "
+                  "every Account must carry a 03_CoA_Mapping row to the universal CoA.",
+    )
+    dimensions_enabled = models.BooleanField(
+        default=False,
+        help_text="Workbook 01_CoA_Definition.Dimensions_Enabled — gates whether the "
+                  "dimension layer (DimensionType / DimensionValue / validation rules) "
+                  "is enforced on this CoA. Flat-only CoAs leave this off.",
+    )
+    governed_instruments_enabled = models.BooleanField(
+        default=False,
+        help_text="Workbook 01_CoA_Definition.Governed_Instruments_Enabled — gates whether "
+                  "Loan / Instrument / Commitment / Policy masters are usable on this CoA.",
+    )
+    description = models.TextField(
+        blank=True,
+        help_text="Workbook 01_CoA_Definition.Description — narrative scope of the CoA. "
+                  "Distinct from `notes` (which holds free-text editorial comments).",
+    )
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -294,9 +323,52 @@ class Account(models.Model):
     fx_revalue_flag = models.BooleanField(default=False)
     tax_relevant_flag = models.BooleanField(default=False)
     monetary_flag = models.BooleanField(default=False)
+
+    # Governance fields promoted from workbook_metadata JSON (workbook tab
+    # `02 CoA Master`). These drive the engine's behaviour at posting and
+    # valuation time — keeping them as columns lets the engine query them
+    # directly instead of digging into JSON.
+    economic_nature = models.CharField(
+        max_length=40, blank=True,
+        help_text="Workbook Economic_Nature, e.g. BALANCE_SHEET, ACCRUAL, "
+                  "PORTFOLIO_ASSET, RELATED_PARTY_BALANCE, SETTLEMENT, "
+                  "IMPAIRMENT, CAPITAL_MOVEMENT, CLEARING, TAX.",
+    )
+    client_view_category = models.CharField(
+        max_length=60, blank=True,
+        help_text="Workbook Client_View_Category — presentation grouping for "
+                  "client-facing statements.",
+    )
+    subledger_required = models.BooleanField(default=False)
+    subledger_type = models.CharField(
+        max_length=24, blank=True,
+        help_text="Workbook Subledger_Type, e.g. BANK / INVESTMENT / "
+                  "RELATED_PARTY / COUNTERPARTY / PROPERTY / FIXED_ASSET / NONE.",
+    )
+    valuation_basis = models.CharField(
+        max_length=24, blank=True,
+        help_text="Workbook Valuation_Basis, e.g. FVPL / FAIR_VALUE / "
+                  "AMORTIZED_COST / COST / HISTORICAL / NA.",
+    )
+    allow_foreign_currency_posting = models.BooleanField(default=True)
+    fx_remeasure_flag = models.CharField(
+        max_length=24, blank=True,
+        help_text="Workbook FX_Remeasure_Flag — Yes / No / BY_VALUATION_METHOD.",
+    )
+    fx_gain_loss_bucket = models.CharField(
+        max_length=40, blank=True,
+        help_text="Workbook FX_Gain_Loss_Bucket, e.g. UNREALIZED_FX / "
+                  "COMBINED_REALIZED_UNREALIZED / FAIR_VALUE_FX / NA.",
+    )
+    historical_vs_closing_rate_method = models.CharField(
+        max_length=24, blank=True,
+        help_text="Workbook Historical_vs_Closing_Rate_Method, e.g. CLOSING / "
+                  "AVERAGE / HISTORICAL / FAIR_VALUE / NA.",
+    )
+
     workbook_metadata = models.JSONField(
         default=dict, blank=True,
-        help_text="Additional workbook columns preserved for later phases.",
+        help_text="Additional workbook columns preserved for round-trip safety.",
     )
     is_active = models.BooleanField(default=True)
     is_system = models.BooleanField(

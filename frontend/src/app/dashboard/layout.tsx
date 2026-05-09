@@ -6,6 +6,7 @@ import { hasOrganizationContext, isAuthenticated, syncOrganizationContext } from
 import Sidebar from "@/components/sidebar";
 import Header from "@/components/header";
 import AskBeakon from "@/components/ask-beakon";
+import BottomNav from "@/components/bottom-nav";
 
 export default function DashboardLayout({
   children,
@@ -56,16 +57,18 @@ export default function DashboardLayout({
     <div className="min-h-screen bg-canvas-100">
       <Sidebar mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
       {/* Main reserves only the collapsed rail width (56px); the sidebar
-          expands as a hover overlay so reading area doesn't shift. */}
+          expands as a hover overlay so reading area doesn't shift.
+          On mobile, pb-20 leaves room for the BottomNav (h-14 + safe-area). */}
       <div className="lg:pl-14">
         <Header onMenuClick={() => setMobileNavOpen(true)} />
-        <main className="p-3 sm:p-5">
+        <main className="p-3 sm:p-5 pb-20 lg:pb-5">
           <div className="canvas-panel min-h-[calc(100vh-5rem-2rem)]">
             {children}
           </div>
         </main>
       </div>
       <AskBeakon />
+      <BottomNav onMore={() => setMobileNavOpen(true)} />
     </div>
   );
 }

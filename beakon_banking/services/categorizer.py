@@ -92,6 +92,20 @@ class Categorizer:
             source_ref=txn.description[:200],
         )
 
+        # Auto-submit for approval so the JE lands directly on the
+        # Approvals page. The bookkeeper has already reviewed the AI
+        # suggestion + offset + memo at this point — that's the same
+        # level of review a manual "Submit for approval" click
+        # represents. Skipping the draft state saves a navigation
+        # round-trip per bank line. Approval itself is still a
+        # separate step (different user, segregation of duties).
+        # Wrapped in the parent ``@transaction.atomic`` — if submit
+        # fails, the draft rolls back too.
+        JournalService.submit_for_approval(
+            je, user=user, note="Auto-submitted from bank categorize",
+        )
+        je.refresh_from_db()
+
         txn.proposed_journal_entry = je
         txn.status = c.TXN_PROPOSED
         if memo:

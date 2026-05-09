@@ -53,20 +53,32 @@ class SourceDocumentService:
     @transaction.atomic
     def attach(
         *,
-        journal_entry,
+        journal_entry=None,
+        bill=None,
+        invoice=None,
         file,
         filename: str,
         content_type: str,
         user=None,
         description: str = "",
     ) -> SourceDocument:
-        """Attach ``file`` (a file-like object with ``.read()``) to
-        ``journal_entry``. Returns the resulting SourceDocument.
+        """Attach ``file`` to a Bill, Invoice, or JournalEntry. Exactly one
+        parent must be set. Returns the resulting SourceDocument.
 
-        If an identical file (same SHA-256) is already attached to this
-        JE and not soft-deleted, the existing record is returned instead
-        of creating a duplicate.
+        If an identical file (same SHA-256) is already attached to that
+        same parent and not soft-deleted, the existing record is returned
+        instead of creating a duplicate.
         """
+        # Exactly one parent must be provided. Catches sloppy callers
+        # before they create orphan rows.
+        parents_set = sum(1 for p in (journal_entry, bill, invoice) if p is not None)
+        if parents_set != 1:
+            raise ValidationError(
+                "Exactly one of journal_entry / bill / invoice must be set.",
+                code=c.ERR_INACTIVE_ACCOUNT,
+                details={"parents_set": parents_set},
+            )
+
         if content_type not in ALLOWED_MIME_TYPES:
             raise ValidationError(
                 f"MIME type {content_type!r} is not permitted for upload.",
@@ -94,12 +106,15 @@ class SourceDocumentService:
             )
         content_hash = hashlib.sha256(raw).hexdigest()
 
-        # Dedup at the JE level: same content already here → return it.
-        existing = SourceDocument.objects.filter(
-            journal_entry=journal_entry,
-            content_hash=content_hash,
-            is_deleted=False,
-        ).first()
+        # Dedup per parent: same content already here → return existing row.
+        dedup_filter = {"content_hash": content_hash, "is_deleted": False}
+        if journal_entry is not None:
+            dedup_filter["journal_entry"] = journal_entry
+        elif bill is not None:
+            dedup_filter["bill"] = bill
+        else:
+            dedup_filter["invoice"] = invoice
+        existing = SourceDocument.objects.filter(**dedup_filter).first()
         if existing:
             return existing
 
@@ -109,6 +124,8 @@ class SourceDocumentService:
 
         doc = SourceDocument(
             journal_entry=journal_entry,
+            bill=bill,
+            invoice=invoice,
             original_filename=filename,
             content_hash=content_hash,
             content_type=content_type,
@@ -122,14 +139,42 @@ class SourceDocumentService:
 
     @staticmethod
     @transaction.atomic
+    def transfer_bill_documents_to_je(bill, journal_entry) -> int:
+        """Stamp ``journal_entry`` on every active SourceDocument attached
+        to ``bill``. The original ``bill`` FK stays so the audit trail can
+        navigate from bill → docs and from JE → docs identically.
+
+        Returns the number of documents transferred.
+        """
+        qs = SourceDocument.objects.filter(
+            bill=bill, is_deleted=False, journal_entry__isnull=True,
+        )
+        count = qs.update(journal_entry=journal_entry)
+        return count
+
+    @staticmethod
+    @transaction.atomic
+    def transfer_invoice_documents_to_je(invoice, journal_entry) -> int:
+        """Mirror of ``transfer_bill_documents_to_je`` for the AR side."""
+        qs = SourceDocument.objects.filter(
+            invoice=invoice, is_deleted=False, journal_entry__isnull=True,
+        )
+        count = qs.update(journal_entry=journal_entry)
+        return count
+
+    @staticmethod
+    @transaction.atomic
     def soft_delete(doc: SourceDocument, user=None) -> SourceDocument:
-        """Mark a document as deleted. Blocked once the JE is in a
-        ledger-impacting status (posted/reversed) — the audit trail
-        must preserve what backed the posting.
+        """Mark a document as deleted. Blocked once the linked JE is in a
+        ledger-impacting status (posted/reversed) — the audit trail must
+        preserve what backed the posting. A doc attached only to a Bill
+        or Invoice (no JE yet) can always be soft-deleted while the
+        parent is still in a draft / pending state — kernel callers
+        should pass that check upstream if they need to enforce it.
         """
         if doc.is_deleted:
             return doc
-        if doc.journal_entry.status in c.JE_LEDGER_IMPACTING:
+        if doc.journal_entry_id and doc.journal_entry.status in c.JE_LEDGER_IMPACTING:
             raise ValidationError(
                 f"Cannot remove attachment from a {doc.journal_entry.status} "
                 f"entry ({doc.journal_entry.entry_number}). "
@@ -150,6 +195,22 @@ class SourceDocumentService:
     def list_for_entry(journal_entry, *, include_deleted: bool = False):
         """Return an ordered queryset of attachments for a JE."""
         qs = journal_entry.documents.select_related("uploaded_by", "deleted_by")
+        if not include_deleted:
+            qs = qs.filter(is_deleted=False)
+        return qs.order_by("uploaded_at")
+
+    @staticmethod
+    def list_for_bill(bill, *, include_deleted: bool = False):
+        """Return an ordered queryset of attachments uploaded against a Bill."""
+        qs = bill.documents.select_related("uploaded_by", "deleted_by")
+        if not include_deleted:
+            qs = qs.filter(is_deleted=False)
+        return qs.order_by("uploaded_at")
+
+    @staticmethod
+    def list_for_invoice(invoice, *, include_deleted: bool = False):
+        """Return an ordered queryset of attachments uploaded against an Invoice."""
+        qs = invoice.documents.select_related("uploaded_by", "deleted_by")
         if not include_deleted:
             qs = qs.filter(is_deleted=False)
         return qs.order_by("uploaded_at")

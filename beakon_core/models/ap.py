@@ -104,6 +104,14 @@ class Bill(models.Model):
     )
 
     description = models.TextField(blank=True)
+    explanation = models.TextField(
+        blank=True,
+        help_text=(
+            "Long-form rationale: WHY this bill exists and WHY each side of "
+            "the resulting JE is debited or credited. Propagates to "
+            "JournalEntry.explanation when the accrual JE posts."
+        ),
+    )
     notes = models.TextField(blank=True)
 
     # ── Accrual JE linkage (DR Expense / CR AP on approval) ──────────
@@ -199,6 +207,17 @@ class BillLine(models.Model):
         max_digits=19, decimal_places=4,
         validators=[MinValueValidator(Decimal("0"))],
         help_text="Pre-tax amount for this line (= quantity × unit_price, usually).",
+    )
+    tax_code = models.ForeignKey(
+        "beakon_core.TaxCode", on_delete=models.PROTECT,
+        null=True, blank=True, related_name="bill_lines",
+        help_text="VAT/tax code applied to this line. NULL = no tax on this line.",
+    )
+    tax_amount = models.DecimalField(
+        max_digits=19, decimal_places=4, default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))],
+        help_text="VAT amount on this line. Auto-derivable from tax_code.rate × amount, "
+                  "but stored explicitly so manual overrides + rounding decisions stick.",
     )
     line_order = models.IntegerField(default=0)
 

@@ -11,11 +11,15 @@ from .models import (
     Account,
     AccountGroup,
     ApprovalAction,
+    BankAccountMaster,
     CoAMapping,
+    Commitment,
     ControlledListEntry,
+    Counterparty,
     Currency,
     DimensionType,
     DimensionValue,
+    Custodian,
     DimensionValidationRule,
     Entity,
     FXRate,
@@ -24,8 +28,13 @@ from .models import (
     JournalEntry,
     JournalLine,
     Loan,
+    Pension,
     Period,
+    Policy,
     Portfolio,
+    Property,
+    RelatedParty,
+    TaxCode,
     TaxLot,
 )
 
@@ -502,4 +511,301 @@ class PortfolioAdmin(admin.ModelAdmin):
             "fields": ("notes", "workbook_metadata", "created_at", "updated_at"),
         }),
     )
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Custodian)
+class CustodianAdmin(admin.ModelAdmin):
+    list_display = (
+        "custodian_id", "custodian_name", "custodian_type",
+        "booking_center", "country_code", "base_currency",
+        "supports_listed_securities_flag", "supports_private_assets_flag",
+        "supports_digital_assets_flag", "status", "active_flag",
+    )
+    list_filter = (
+        "custodian_type", "status", "active_flag",
+        "country_code", "base_currency",
+        "supports_listed_securities_flag", "supports_private_assets_flag",
+        "supports_funds_flag", "supports_derivatives_flag",
+        "supports_digital_assets_flag", "supports_cash_sweep_flag",
+        "nominee_holding_flag", "segregated_account_flag",
+        "posting_allowed_flag", "organization",
+    )
+    search_fields = (
+        "custodian_id", "custodian_name", "short_name",
+        "linked_counterparty_id", "legal_entity_name",
+        "booking_center", "default_portfolio_code", "notes",
+    )
+    raw_id_fields = ("default_portfolio",)
+    date_hierarchy = "relationship_start_date"
+    fieldsets = (
+        ("Identity", {
+            "fields": ("organization", "custodian_id", "custodian_name",
+                       "short_name", "custodian_type", "custodian_subtype"),
+        }),
+        ("Linkage", {
+            "fields": ("linked_counterparty_id",
+                       "default_portfolio_code", "default_portfolio"),
+        }),
+        ("Legal / location", {
+            "fields": ("legal_entity_name", "booking_center",
+                       "country_code", "jurisdiction_code"),
+        }),
+        ("Currency", {
+            "fields": ("base_currency", "reporting_currency"),
+        }),
+        ("Relationship lifecycle", {
+            "fields": ("relationship_start_date", "relationship_end_date"),
+        }),
+        ("Capabilities", {
+            "fields": ("supports_listed_securities_flag",
+                       "supports_private_assets_flag",
+                       "supports_funds_flag",
+                       "supports_derivatives_flag",
+                       "supports_digital_assets_flag",
+                       "supports_cash_sweep_flag",
+                       "nominee_holding_flag",
+                       "segregated_account_flag"),
+        }),
+        ("Status & workflow", {
+            "fields": ("status", "active_flag", "posting_allowed_flag",
+                       "approval_required_flag",
+                       "source_document_required_flag"),
+        }),
+        ("Round-trip", {
+            "classes": ("collapse",),
+            "fields": ("notes", "workbook_metadata", "created_at", "updated_at"),
+        }),
+    )
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(RelatedParty)
+class RelatedPartyAdmin(admin.ModelAdmin):
+    list_display = (
+        "related_party_id", "related_party_name", "related_party_type",
+        "party_form", "relationship_to_client", "country_code",
+        "control_flag", "beneficiary_flag", "status", "active_flag",
+    )
+    list_filter = (
+        "related_party_type", "party_form", "status", "active_flag",
+        "country_code", "tax_residence_country", "base_currency",
+        "control_flag", "beneficiary_flag", "settlor_flag",
+        "protector_flag", "director_flag", "signer_flag",
+        "loan_eligible_flag", "distribution_eligible_flag",
+        "capital_contribution_eligible_flag",
+        "expense_allocation_eligible_flag",
+        "family_expense_eligible_flag", "net_worth_inclusion_flag",
+        "organization",
+    )
+    search_fields = (
+        "related_party_id", "related_party_name", "short_name",
+        "related_party_subtype", "relationship_to_client",
+        "default_portfolio_code", "default_property_code",
+        "default_bank_reference", "notes",
+    )
+    raw_id_fields = ("default_portfolio",)
+    date_hierarchy = "related_party_since"
+    fieldsets = (
+        ("Identity", {
+            "fields": ("organization", "related_party_id", "related_party_name",
+                       "short_name", "related_party_type", "related_party_subtype",
+                       "party_form", "relationship_to_client"),
+        }),
+        ("Ownership / control", {
+            "fields": ("ownership_percent", "control_flag",
+                       "beneficiary_flag", "settlor_flag",
+                       "protector_flag", "director_flag", "signer_flag"),
+        }),
+        ("Status / lifecycle", {
+            "fields": ("status", "active_flag",
+                       "related_party_since", "related_party_until"),
+        }),
+        ("Jurisdiction / currency", {
+            "fields": ("country_code", "jurisdiction_code",
+                       "base_currency", "reporting_currency",
+                       "tax_residence_country"),
+        }),
+        ("Eligibility", {
+            "fields": ("loan_eligible_flag", "distribution_eligible_flag",
+                       "capital_contribution_eligible_flag",
+                       "expense_allocation_eligible_flag",
+                       "family_expense_eligible_flag",
+                       "net_worth_inclusion_flag"),
+        }),
+        ("Default linkage", {
+            "fields": ("default_portfolio_code", "default_portfolio",
+                       "default_property_code", "default_bank_reference"),
+        }),
+        ("Workflow", {
+            "fields": ("source_document_required_flag", "approval_required_flag"),
+        }),
+        ("Round-trip", {
+            "classes": ("collapse",),
+            "fields": ("notes", "workbook_metadata", "created_at", "updated_at"),
+        }),
+    )
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Counterparty)
+class CounterpartyAdmin(admin.ModelAdmin):
+    list_display = ("counterparty_id", "counterparty_name", "counterparty_type",
+                    "country_code", "base_currency", "kyc_status", "risk_rating",
+                    "status", "active_flag")
+    list_filter = ("counterparty_type", "status", "active_flag",
+                   "country_code", "base_currency", "kyc_status",
+                   "aml_risk_level", "risk_rating",
+                   "related_party_flag", "intercompany_flag",
+                   "loan_eligible_flag", "ap_eligible_flag", "ar_eligible_flag",
+                   "tax_eligible_flag", "insurance_eligible_flag",
+                   "education_eligible_flag", "professional_fees_eligible_flag",
+                   "organization")
+    search_fields = ("counterparty_id", "counterparty_name", "short_name",
+                     "external_reference", "tax_id", "registration_no",
+                     "default_bank_reference", "notes")
+    fieldsets = (
+        ("Identity", {"fields": ("organization", "counterparty_id", "counterparty_name",
+                                  "short_name", "counterparty_type", "counterparty_subtype",
+                                  "status", "active_flag")}),
+        ("External refs", {"fields": ("external_reference", "tax_id", "registration_no")}),
+        ("Jurisdiction / currency", {"fields": ("country_code", "jurisdiction_code",
+                                                  "base_currency", "default_payment_currency",
+                                                  "language_code")}),
+        ("Payment / settlement", {"fields": ("payment_terms", "settlement_method",
+                                              "default_bank_reference")}),
+        ("Risk / compliance", {"fields": ("risk_rating", "kyc_status", "aml_risk_level",
+                                           "sanctions_check_flag")}),
+        ("Relationship flags", {"fields": ("related_party_flag", "intercompany_flag")}),
+        ("Eligibility", {"fields": ("loan_eligible_flag", "ap_eligible_flag",
+                                     "ar_eligible_flag", "tax_eligible_flag",
+                                     "insurance_eligible_flag", "education_eligible_flag",
+                                     "professional_fees_eligible_flag")}),
+        ("Round-trip", {"classes": ("collapse",),
+                        "fields": ("notes", "workbook_metadata", "created_at", "updated_at")}),
+    )
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(BankAccountMaster)
+class BankAccountMasterAdmin(admin.ModelAdmin):
+    list_display = ("bank_account_id", "bank_account_name", "bank_name",
+                    "account_currency", "account_type", "account_purpose",
+                    "country_code", "status", "active_flag", "posting_allowed_flag")
+    list_filter = ("account_type", "account_subtype", "account_purpose",
+                   "status", "active_flag", "posting_allowed_flag",
+                   "restricted_flag", "interest_bearing_flag",
+                   "overdraft_allowed_flag", "country_code",
+                   "account_currency", "kyc_status", "organization")
+    search_fields = ("bank_account_id", "bank_account_name", "short_name",
+                     "bank_name", "iban_or_account_no_masked", "swift_bic",
+                     "account_holder_id_code", "bank_counterparty_id_code",
+                     "credit_line_linked_loan_id_code", "default_portfolio_code",
+                     "default_related_party_id_code", "default_counterparty_id_code",
+                     "notes")
+    raw_id_fields = ("account_holder_related_party", "bank_counterparty",
+                     "credit_line_linked_loan", "default_portfolio",
+                     "default_related_party", "default_counterparty")
+    date_hierarchy = "opening_date"
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Property)
+class PropertyAdmin(admin.ModelAdmin):
+    list_display = ("property_id", "property_name", "property_type",
+                    "city", "country_code", "property_currency",
+                    "current_carrying_value", "mortgage_linked_flag",
+                    "status", "active_flag")
+    list_filter = ("property_type", "property_subtype", "usage_type",
+                   "ownership_type", "owner_type", "status", "active_flag",
+                   "mortgage_linked_flag", "rental_income_flag",
+                   "personal_use_flag", "expense_allocation_allowed_flag",
+                   "net_worth_inclusion_flag", "country_code",
+                   "property_currency", "valuation_method", "organization")
+    search_fields = ("property_id", "property_name", "short_name",
+                     "owner_id_code", "primary_related_party_id_code",
+                     "linked_portfolio_id_code", "linked_loan_id_code",
+                     "linked_spv_id", "city", "address_line_1",
+                     "postal_code", "notes")
+    raw_id_fields = ("owner_related_party", "primary_related_party",
+                     "linked_portfolio", "linked_loan")
+    date_hierarchy = "acquisition_date"
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Policy)
+class PolicyAdmin(admin.ModelAdmin):
+    list_display = ("policy_id", "policy_name", "policy_type",
+                    "policy_currency", "premium_frequency",
+                    "coverage_amount", "expiry_date", "status", "active_flag")
+    list_filter = ("policy_type", "policy_subtype", "status", "active_flag",
+                   "investment_linked_flag", "claim_eligible_flag",
+                   "premium_payable_flag", "country_code",
+                   "policy_currency", "premium_frequency", "organization")
+    search_fields = ("policy_id", "policy_name", "short_name",
+                     "policy_owner_id_code", "primary_related_party_id_code",
+                     "insured_party_id_code", "insurer_counterparty_id_code",
+                     "linked_portfolio_id_code", "linked_property_id_code",
+                     "linked_beneficiary_id_code", "policy_number_masked",
+                     "notes")
+    raw_id_fields = ("policy_owner_related_party", "primary_related_party",
+                     "insured_party_related_party", "insurer_counterparty",
+                     "linked_portfolio", "linked_property",
+                     "linked_beneficiary_related_party")
+    date_hierarchy = "inception_date"
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Pension)
+class PensionAdmin(admin.ModelAdmin):
+    list_display = ("pension_id", "pension_name", "pension_type",
+                    "pension_currency", "vested_balance",
+                    "expected_retirement_date", "status", "active_flag")
+    list_filter = ("pension_type", "pension_subtype", "status", "active_flag",
+                   "tax_privileged_flag", "employer_sponsored_flag",
+                   "country_code", "pension_currency", "organization")
+    search_fields = ("pension_id", "pension_name", "short_name",
+                     "holder_related_party_id_code",
+                     "provider_counterparty_id_code",
+                     "employer_counterparty_id_code",
+                     "linked_portfolio_id_code", "linked_bank_account_id_code",
+                     "plan_number_masked", "notes")
+    raw_id_fields = ("holder_related_party", "provider_counterparty",
+                     "employer_counterparty", "linked_portfolio",
+                     "linked_bank_account")
+    date_hierarchy = "enrollment_date"
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(Commitment)
+class CommitmentAdmin(admin.ModelAdmin):
+    list_display = ("commitment_id", "commitment_name", "commitment_type",
+                    "commitment_currency", "vintage_year",
+                    "total_commitment_amount", "called_to_date",
+                    "unfunded_balance", "status", "active_flag")
+    list_filter = ("commitment_type", "commitment_subtype", "status", "active_flag",
+                   "vintage_year", "recallable_distributions_flag",
+                   "country_code", "commitment_currency", "organization")
+    search_fields = ("commitment_id", "commitment_name", "short_name",
+                     "holder_related_party_id_code",
+                     "general_partner_counterparty_id_code",
+                     "vehicle_instrument_id_code",
+                     "linked_portfolio_id_code",
+                     "funding_bank_account_id_code", "notes")
+    raw_id_fields = ("holder_related_party", "general_partner_counterparty",
+                     "vehicle_instrument", "linked_portfolio",
+                     "funding_bank_account")
+    date_hierarchy = "inception_date"
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(TaxCode)
+class TaxCodeAdmin(admin.ModelAdmin):
+    list_display = ("code", "name", "country_code", "tax_type", "rate",
+                    "output_account", "input_account", "is_reverse_charge",
+                    "active_flag")
+    list_filter = ("tax_type", "country_code", "active_flag",
+                   "is_reverse_charge", "organization")
+    search_fields = ("code", "name", "country_code", "notes")
+    raw_id_fields = ("output_account", "input_account")
     readonly_fields = ("created_at", "updated_at")

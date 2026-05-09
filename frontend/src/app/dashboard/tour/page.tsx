@@ -1,22 +1,26 @@
 "use client";
 
-/* Beakon Tour — end-to-end walkthrough of what the product does for a
- * single entity today, anchored on Kaushik Ghosh (Swiss Person entity).
+/* Beakon Tour — meeting-ready walkthrough of the platform.
  *
- * Built as a presentation page, not a dashboard: each section reads top to
- * bottom like a story, pulls one or two live numbers from Kaushik's books
- * so it doesn't feel static, and deep-links into the actual feature so the
- * demo hop from prose → live UI is a single click.
+ * Reads live workspace state from /beakon/workbook-implementation/ so
+ * every count and sample ID is real, not seeded for a fake demo entity.
  *
- * Sections map 1:1 to the Phase 1 items in Thomas's founder working paper.
+ * Structure mirrors the architecture PDF (2026-04-30):
+ *   1. Hero with the "Accounting, without the work" tagline + live counts
+ *   2. Workbook → DB evidence (primary artefact)
+ *   3. The 16-layer architecture mapped to what's live today
+ *   4. The four engine builds with their live page links
+ *   5. Masters at a glance — every workbook master + row count + sample IDs
+ *   6. What's next on the build queue
  */
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import {
-  ArrowRight, Briefcase, Building2, CalendarCheck, CheckCircle2,
-  Coins, Compass, Inbox, Landmark, Layers, ListTree,
-  NotebookPen, Shield, Sparkles, TrendingUp,
+  ArrowRight, BookCheck, Building2, Calculator, CalendarCheck,
+  CheckCircle2, Coins, Database, FileSpreadsheet, Inbox, Landmark,
+  Layers, ListTree, MinusCircle, Network, NotebookPen, Receipt, Repeat,
+  Send, Shield, Sparkles, TrendingUp, Workflow,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -25,426 +29,69 @@ import { PageHeader } from "@/components/ui/page-header";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
-interface Entity {
-  id: number;
-  code: string;
-  name: string;
-  entity_type: string;
-  country: string;
-  functional_currency: string;
+interface ImplTab {
+  tab: string;
+  type: "data" | "extension";
+  model: string;
+  db_table: string;
+  field_count: number;
+  row_count: number;
+  sample_ids: string[];
+  url: string;
 }
 
-interface Account {
-  id: number;
-  code: string;
-  name: string;
-  account_subtype: string;
-  entity: number | null;
-  is_active: boolean;
+interface ImplResponse {
+  organization: string;
+  workbook: string;
+  architecture_pdf: string;
+  tabs: ImplTab[];
+  totals: {
+    tab_count: number;
+    data_tabs: number;
+    extension_tabs: number;
+    total_rows: number;
+    fully_loaded_count: number;
+  };
 }
-
-interface CoADefinition {
-  id: number;
-  coa_id: string;
-  name: string;
-  coa_type: string;
-  version_no: number;
-  status: string;
-  base_currency: string;
-  default_reporting_currency: string;
-  account_count: number;
-}
-
-interface JournalEntry {
-  id: number;
-  status: string;
-  entity: number;
-  date: string;
-}
-
-interface BankTransaction {
-  id: number;
-  status: string;
-}
-
-interface LedgerEntry { line_id: number; }
-interface LedgerResp { closing_balance: string; entries: LedgerEntry[]; }
 
 
 // ── Page ──────────────────────────────────────────────────────────────────
 
 export default function BeakonTourPage() {
+  const [impl, setImpl] = useState<ImplResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [kaushik, setKaushik] = useState<Entity | null>(null);
-  const [coaDefinitions, setCoaDefinitions] = useState<CoADefinition[]>([]);
-  const [accountCount, setAccountCount] = useState<number>(0);
-  const [investmentCount, setInvestmentCount] = useState<number>(0);
-  const [portfolioValue, setPortfolioValue] = useState<number>(0);
-  const [jeByStatus, setJeByStatus] = useState<Record<string, number>>({});
-  const [bankTxnCount, setBankTxnCount] = useState<number>(0);
-  const [pendingBankTxns, setPendingBankTxns] = useState<number>(0);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    void loadEverything();
+    api.get<ImplResponse>("/beakon/workbook-implementation/")
+      .then(setImpl)
+      .catch((e) => setErr(e?.error?.message || e?.message || "Failed to load"))
+      .finally(() => setLoading(false));
   }, []);
 
-  async function loadEverything() {
-    try {
-      // 1. Find Kaushik by code.
-      const ents = await api.get<{ results: Entity[] } | Entity[]>(
-        "/beakon/entities/?search=KGHOSH",
-      );
-      const list = Array.isArray(ents) ? ents : (ents.results ?? []);
-      const k = list.find((e) => e.code === "KGHOSH") || null;
-      setKaushik(k);
-
-      if (!k) { setLoading(false); return; }
-
-      // 2. CoA definitions now sit above the account rows.
-      try {
-        const coaResp = await api.get<{ results: CoADefinition[] } | CoADefinition[]>(
-          "/beakon/coa-definitions/",
-        );
-        const coaList = Array.isArray(coaResp) ? coaResp : (coaResp.results ?? []);
-        setCoaDefinitions(coaList);
-      } catch {
-        // Non-fatal for the tour.
-      }
-
-      // 3. Kaushik's accounts.
-      const accResp = await api.get<{ results: Account[] } | Account[]>(
-        `/beakon/accounts/?entity=${k.id}&is_active=true`,
-      );
-      const accList = Array.isArray(accResp) ? accResp : (accResp.results ?? []);
-      setAccountCount(accList.length);
-      const investAccts = accList.filter(
-        (a) => a.account_subtype === "investment" || a.account_subtype === "bank" || a.account_subtype === "cash",
-      );
-      setInvestmentCount(accList.filter((a) => a.account_subtype === "investment").length);
-
-      // 4. Portfolio closing balance — sum the cash + investment ledgers.
-      const ledgers = await Promise.all(
-        investAccts.map((a) =>
-          api.get<LedgerResp>(`/beakon/reports/account-ledger/?account_id=${a.id}`),
-        ),
-      );
-      const total = ledgers.reduce((s, l) => s + parseFloat(l.closing_balance || "0"), 0);
-      setPortfolioValue(total);
-
-      // 5. JE counts by status.
-      const jeResp = await api.get<{ results: JournalEntry[] } | JournalEntry[]>(
-        `/beakon/journal-entries/?entity=${k.id}&page_size=50`,
-      );
-      const jes = Array.isArray(jeResp) ? jeResp : (jeResp.results ?? []);
-      const counts: Record<string, number> = {};
-      for (const je of jes) counts[je.status] = (counts[je.status] || 0) + 1;
-      setJeByStatus(counts);
-
-      // 6. Bank transactions attached to any bank account for Kaushik.
-      // The banking API filters by bank_account; we just count totals for
-      // this entity by finding any transactions tied to accounts we know.
-      try {
-        const txResp = await api.get<{ results: BankTransaction[] } | BankTransaction[]>(
-          `/beakon/bank-transactions/?page_size=100`,
-        );
-        const txs = Array.isArray(txResp) ? txResp : (txResp.results ?? []);
-        setBankTxnCount(txs.length);
-        setPendingBankTxns(txs.filter((t) => t.status === "new" || t.status === "proposed").length);
-      } catch {
-        // Bank-feed endpoint may be gated; it's not essential for the tour.
-      }
-    } catch {
-      // Silent — the page still renders as prose even without live numbers.
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const eur = (n: number) =>
-    n.toLocaleString("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  const totalJEs = Object.values(jeByStatus).reduce((s, n) => s + n, 0);
-  const statesCovered = Object.keys(jeByStatus).length;
-  const activeCoa = coaDefinitions.find((c) => c.status.toLowerCase() === "active") || coaDefinitions[0] || null;
-
   return (
-    <div className="max-w-4xl">
+    <div className="max-w-5xl">
       <PageHeader
         title="Beakon Tour"
-        description="Meeting-ready walkthrough of the Phase 1 accounting backbone, shown through one live entity in the workspace. Each section maps directly to the founder working paper."
+        description="Live walkthrough of what the platform does today. Every count below is read from your database in real time — no seed data required."
       />
 
-      {/* Hero — Kaushik at a glance */}
-      <HeroCard
-        kaushik={kaushik}
-        loading={loading}
-        portfolioValue={portfolioValue}
-        totalJEs={totalJEs}
-        statesCovered={statesCovered}
-        pendingBankTxns={pendingBankTxns}
-        activeCoa={activeCoa}
-      />
+      <HeroCard impl={impl} loading={loading} err={err} />
 
-      <DemoFlowCard activeCoa={activeCoa} />
+      <WorkbookEvidenceCard impl={impl} />
 
-      {/* Step sections */}
-      <div className="mt-8 space-y-5">
-        <Step
-          n={1}
-          icon={Building2}
-          title="A legal / reporting unit is created"
-          blueprint="Obj. 1 — entity master"
-          prose={
-            <>
-              Every journal entry, account, and period in Beakon binds to exactly one entity.
-              For Kaushik we've captured his identity, country, functional currency,
-              and fiscal calendar. The same model supports trusts, foundations, holding
-              companies, funds, and branches — with parent/child links for consolidation.
-            </>
-          }
-          stats={kaushik ? [
-            { label: "Type",     value: "Person" },
-            { label: "Country",  value: kaushik.country || "CH" },
-            { label: "Currency", value: kaushik.functional_currency },
-          ] : []}
-          link={kaushik ? `/dashboard/entities/${kaushik.id}` : "/dashboard/entities"}
-          linkLabel={kaushik ? "Open entity detail" : "Open Entities"}
-        />
+      <ArchitectureLayersSection />
 
-        <Step
-          n={2}
-          icon={Layers}
-          title="The chart is defined before accounts exist"
-          blueprint="Excel tab 01 — CoA Definition"
-          prose={
-            <>
-              Beakon now has a formal chart-definition layer above the raw account rows.
-              This is where Thomas's workbook starts: one named chart, one type, one version,
-              one status, one base currency, and a reporting-currency setup. It gives us a
-              clean parent record for later mapping, dimensions, and validation rules.
-            </>
-          }
-          stats={[
-            { label: "Definitions", value: coaDefinitions.length.toString() },
-            { label: "Active CoA", value: activeCoa?.coa_id || "—" },
-            { label: "Base / report", value: activeCoa ? `${activeCoa.base_currency} / ${activeCoa.default_reporting_currency || activeCoa.base_currency}` : "—" },
-          ]}
-          link="/dashboard/coa-definitions"
-          linkLabel="Open CoA definition layer"
-        />
+      <EngineBuildsSection />
 
-        <Step
-          n={3}
-          icon={ListTree}
-          title="The chart of accounts sits under that definition"
-          blueprint="Obj. 1 — chart of accounts structure"
-          prose={
-            <>
-              Kaushik has his own CoA: a personal cash account, four investment holdings
-              (Nestle SA, Apple Inc, Swiss Confederation 10Y Bond, iShares MSCI World ETF),
-              a capital contributions account, two revenue accounts (investment income,
-              realized gains), and two expense accounts (brokerage fees, personal expenses).
-              Accounts are typed + subtyped so reports classify correctly without hand-coding.
-            </>
-          }
-          stats={[
-            { label: "Accounts",    value: accountCount.toString() },
-            { label: "Investments", value: investmentCount.toString() },
-            { label: "CoA type",    value: "Personal / family office" },
-          ]}
-          link="/dashboard/accounts"
-          linkLabel="Open account structure"
-        />
+      <MastersAtGlanceSection impl={impl} loading={loading} />
 
-        <Step
-          n={4}
-          icon={NotebookPen}
-          title="Journal entries run through a controlled state machine"
-          blueprint="Obj. 1 & 4 — JE engine, debit/credit integrity, approval statuses"
-          prose={
-            <>
-              Kaushik's April books contain a complete state-machine story: opening capital,
-              a consulting deposit, two investment purchases, a dividend receipt, a partial
-              bond sale with a realized gain, an advisor fee, a rejected personal expense
-              (approver caught it), an approved Apple top-up waiting to post, a pending broker
-              fee, and a draft ETF purchase. Every line is DB-enforced to balance.
-            </>
-          }
-          stats={[
-            { label: "Total JEs",       value: totalJEs.toString() },
-            { label: "States covered",  value: `${statesCovered} / 5` },
-            { label: "Rejected / draft", value: `${jeByStatus.rejected || 0} / ${jeByStatus.draft || 0}` },
-          ]}
-          link="/dashboard/journal-entries"
-          linkLabel="Open journal workflow"
-        />
-
-        <Step
-          n={5}
-          icon={Inbox}
-          title="Nothing posts without review"
-          blueprint="Obj. 4 — controlled review workflow"
-          prose={
-            <>
-              Nothing reaches the ledger without an approver's explicit post. The Review
-              Queue is the approver's inbox — submitted entries wait there until approved,
-              rejected, or returned. Every transition is captured with actor, timestamp, and
-              before/after status. The blueprint's required status set is implemented
-              exactly: <em>draft → pending_approval → approved → rejected → posted</em>.
-            </>
-          }
-          stats={[
-            { label: "Awaiting approval", value: (jeByStatus.pending_approval || 0).toString() },
-            { label: "Approved, unposted", value: (jeByStatus.approved || 0).toString() },
-            { label: "Posted in April", value: (jeByStatus.posted || 0).toString() },
-          ]}
-          link="/dashboard/approvals"
-          linkLabel="Open approval queue"
-        />
-
-        <Step
-          n={6}
-          icon={Briefcase}
-          title="Investments are visible as live holdings"
-          blueprint="From your voice note, 2026-04-23"
-          prose={
-            <>
-              Opening Kaushik's detail page lands directly on his Investments tab. Holdings
-              appear as individual rows — Nestle, Apple, Swiss Confederation bond, iShares
-              ETF — each with its book value and a click-through to the journal lines behind
-              it. A "New Holding" action creates another investment account on his books in
-              seconds, ready for ledger activity. Marked Draft until you sign off on the
-              instrument-master design.
-            </>
-          }
-          stats={[
-            { label: "Portfolio value", value: `EUR ${eur(portfolioValue)}` },
-            { label: "Holdings",        value: investmentCount.toString() },
-            { label: "Currency",        value: kaushik?.functional_currency || "EUR" },
-          ]}
-          link={kaushik ? `/dashboard/entities/${kaushik.id}?tab=investments` : "/dashboard/entities"}
-          linkLabel={kaushik ? "Open investment view" : "Open Entities"}
-        />
-
-        <Step
-          n={7}
-          icon={TrendingUp}
-          title="Reports drill back to the originating entries"
-          blueprint="Obj. 2 — reporting foundation + drill-down"
-          prose={
-            <>
-              Trial balance, P&amp;L, balance sheet, journal listing, and account ledger
-              are all live on Kaushik's books. The blueprint's required chain —{" "}
-              <strong>report line → journal entry → source document</strong> — is one click
-              in each direction. A £2,000 realised gain on the TB drills into the Apr 15
-              bond-sale JE. Nothing is aggregated in a way you can't unwind.
-            </>
-          }
-          stats={[
-            { label: "Report types",  value: "TB · P&L · BS · Journal · Ledger" },
-            { label: "Drill-down",    value: "3 levels deep" },
-            { label: "Trial balance", value: "Ties (Dr = Cr)" },
-          ]}
-          link="/dashboard/reports"
-          linkLabel="Open live reports"
-        />
-
-        <Step
-          n={8}
-          icon={CalendarCheck}
-          title="Periods enforce accounting control"
-          blueprint="Obj. 1 — period control"
-          prose={
-            <>
-              Entities run on their own fiscal calendars. Kaushik's April 2026 period is
-              Open; March is Closed. A closed period refuses new journal entries full-stop;
-              a soft-closed period accepts reversals only. The period lock is a genuine
-              guarantee, not a UI hint.
-            </>
-          }
-          stats={[
-            { label: "April 2026", value: "Open" },
-            { label: "Month-to-date posts", value: (jeByStatus.posted || 0).toString() },
-            { label: "Close states", value: "open · soft_close · closed" },
-          ]}
-          link="/dashboard/periods"
-          linkLabel="Open period controls"
-        />
-
-        <Step
-          n={9}
-          icon={Coins}
-          title="FX and intercompany are built into the model"
-          blueprint="Obj. 1 — FX + intercompany treatment"
-          prose={
-            <>
-              Kaushik's accounts happen to all be EUR today — he's a single-currency
-              person — but every journal line carries native amount, functional amount, and
-              an FX rate stamp. An FX-rate table backs the conversion. Intercompany groups
-              pair mirrored JEs on two entities (e.g. a loan from the family holding company
-              to Kaushik), giving clean elimination at consolidation time.
-            </>
-          }
-          stats={[
-            { label: "FX-capable",   value: "Yes · every line" },
-            { label: "IC model",     value: "Group-linked pair" },
-            { label: "Revaluation",  value: "Pending Thomas sign-off" },
-          ]}
-          link="/dashboard/fx-rates"
-          linkLabel="Open FX setup"
-        />
-
-        <Step
-          n={10}
-          icon={Landmark}
-          title="Bank data enters through one controlled feeder"
-          blueprint="Obj. 3 — one feeder into the ledger"
-          prose={
-            <>
-              A CSV import from UBS (account ending 4812) brought in three transactions —
-              a dividend, a platform fee, and a bond coupon. Each is queued as "New" and
-              becomes a proposed journal entry only when categorised — which then flows
-              through the same approval pipe as any manual entry. The feed can't bypass
-              control.
-            </>
-          }
-          stats={[
-            { label: "Imports",      value: bankTxnCount > 0 ? `1 file · ${bankTxnCount} txns` : "1 file · 3 txns" },
-            { label: "Awaiting",     value: pendingBankTxns ? `${pendingBankTxns} to categorise` : "3 to categorise" },
-            { label: "Status flow",  value: "new → proposed → matched" },
-          ]}
-          link="/dashboard/bank"
-          linkLabel="Open bank feed"
-        />
-
-        <Step
-          n={11}
-          icon={Shield}
-          title="Every action is fully traceable"
-          blueprint="Obj. 1 & 4 — audit trail"
-          prose={
-            <>
-              Two overlapping trails exist: one per-JE (every state transition with actor,
-              timestamp, from/to status) and one system-wide (every object mutation with
-              user, IP, and change diff). Kaushik's rejected lunch entry shows the approver
-              explicitly writing the rejection reason — the audit trail captures it verbatim.
-            </>
-          }
-          stats={[
-            { label: "Per-JE history",   value: "On every entry" },
-            { label: "Rejection reason", value: "Captured verbatim" },
-            { label: "System audit",     value: "User · IP · diff" },
-          ]}
-          link="/dashboard/audit"
-          linkLabel="Open audit trail"
-        />
-      </div>
-
-      {/* Closing — what's still pending */}
       <PendingCard />
 
       <p className="mt-10 mb-6 text-center text-[11px] text-gray-400">
-        Blueprint references are to <em>Beakon — Founder Working Paper</em>, 17 April 2026.
+        Sources: <em>Beakon Founder Working Paper</em> (17 Apr 2026) ·{" "}
+        <em>CoA Workbook v2</em> (17 Apr 2026) ·{" "}
+        <em>Beakon Architecture</em> (30 Apr 2026).
       </p>
     </div>
   );
@@ -454,128 +101,57 @@ export default function BeakonTourPage() {
 // ── Hero ──────────────────────────────────────────────────────────────────
 
 function HeroCard({
-  kaushik, loading, portfolioValue, totalJEs, statesCovered, pendingBankTxns, activeCoa,
-}: {
-  kaushik: Entity | null;
-  loading: boolean;
-  portfolioValue: number;
-  totalJEs: number;
-  statesCovered: number;
-  pendingBankTxns: number;
-  activeCoa: CoADefinition | null;
-}) {
-  const eur = (n: number) =>
-    n.toLocaleString("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  if (loading) {
-    return (
-      <div className="mt-6 rounded-2xl border border-canvas-200/70 bg-white p-6 shadow-sm h-40 animate-pulse" />
-    );
-  }
-
-  if (!kaushik) {
-    return (
-      <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/50 p-5 text-sm text-amber-900">
-        <strong>Kaushik Ghosh entity not found in this workspace.</strong>{" "}
-        Run <code className="font-mono text-xs bg-white px-1 py-0.5 rounded border border-amber-200">scripts/seed_kaushik_demo.py</code>{" "}
-        and <code className="font-mono text-xs bg-white px-1 py-0.5 rounded border border-amber-200">scripts/seed_kaushik_lifecycle.py</code>{" "}
-        to populate the demo data, then reload this page.
-      </div>
-    );
-  }
-
+  impl, loading, err,
+}: { impl: ImplResponse | null; loading: boolean; err: string | null }) {
   return (
     <div className="mt-6 rounded-2xl border border-canvas-200/70 bg-gradient-to-br from-brand-50/70 via-white to-white shadow-[0_2px_8px_rgba(15,23,42,0.04)] p-6">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-700 ring-1 ring-inset ring-brand-100">
-              <Compass className="h-3 w-3" />
-              Phase 1 walkthrough
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700 ring-1 ring-inset ring-rose-100">
-              Person
-            </span>
-          </div>
-          <h2 className="text-[26px] font-semibold tracking-tight text-gray-900 leading-tight">
-            {kaushik.name}
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-700 ring-1 ring-inset ring-brand-100">
+            <Workflow className="h-3 w-3" />
+            16-layer architecture · live status
+          </span>
+          <h2 className="mt-2 text-[26px] font-semibold tracking-tight text-gray-900 leading-tight">
+            Accounting, without the work.
           </h2>
-          <p className="mt-1 text-sm text-gray-500">
-            <span className="font-mono text-gray-700">{kaushik.code}</span>
-            {" · "}
-            {kaushik.country || "CH"}
-            {" · "}
-            <span className="font-mono">{kaushik.functional_currency}</span>
-            {" · "}
-            Entity id {kaushik.id}
+          <p className="mt-1 text-sm text-gray-500 leading-relaxed max-w-xl">
+            AI assists. Humans approve. The accounting engine validates. Every workbook tab,
+            every dimension, every validation rule Thomas wrote is live in this system —
+            and the engine refuses to post a journal entry that violates them.
           </p>
         </div>
-        <Link
-          href={`/dashboard/entities/${kaushik.id}?tab=investments`}
-          className="btn-primary shrink-0 self-start"
-        >
-          <Briefcase className="w-4 h-4 mr-1.5" />
-          Open Live Entity
+        <Link href="/dashboard/blueprint/implementation" className="btn-primary shrink-0 self-start">
+          <FileSpreadsheet className="w-4 h-4 mr-1.5" />
+          Open Workbook → DB evidence
         </Link>
       </div>
 
-        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-          <HeroStat label="Portfolio value" value={`EUR ${eur(portfolioValue)}`} accent />
-          <HeroStat label="Journal entries" value={totalJEs.toString()} sub={`${statesCovered} / 5 states`} />
-        <HeroStat label="Bank feed"       value={pendingBankTxns ? `${pendingBankTxns} pending` : "3 imports"} />
-        <HeroStat label="Active CoA" value={activeCoa?.coa_id || "—"} sub="Entity → chart → accounts" />
+      <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <HeroStat
+          label="Workbook tabs in DB"
+          value={loading ? "—" : `${impl?.totals.data_tabs ?? 0} / 17`}
+          sub={impl ? `${impl.totals.fully_loaded_count} loaded with data` : "loading…"}
+          accent
+        />
+        <HeroStat
+          label="Total rows"
+          value={loading ? "—" : (impl?.totals.total_rows ?? 0).toLocaleString()}
+          sub="across every workbook table"
+        />
+        <HeroStat
+          label="Architecture extensions"
+          value={loading ? "—" : `${impl?.totals.extension_tabs ?? 0}`}
+          sub="Pension · Commitment · Tax · Recognition"
+        />
+        <HeroStat
+          label="Organization"
+          value={loading ? "—" : (impl?.organization ?? "—")}
+          sub={err ? "could not reach API" : "live workspace"}
+        />
       </div>
     </div>
   );
 }
-
-function DemoFlowCard({ activeCoa }: { activeCoa: CoADefinition | null }) {
-  const flow = [
-    { label: "1. Entity", href: "/dashboard/entities" },
-    { label: "2. CoA Definition", href: "/dashboard/coa-definitions" },
-    { label: "3. Chart of Accounts", href: "/dashboard/accounts" },
-    { label: "4. Journal Entries", href: "/dashboard/journal-entries" },
-    { label: "5. Review Queue", href: "/dashboard/approvals" },
-    { label: "6. Reports", href: "/dashboard/reports" },
-    { label: "7. Audit", href: "/dashboard/audit" },
-  ];
-
-  return (
-    <div className="mt-5 rounded-2xl border border-canvas-200/70 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
-            Recommended demo flow
-          </p>
-          <h3 className="mt-0.5 text-base font-semibold tracking-tight text-gray-900">
-            Use this order during the Teams walkthrough
-          </h3>
-          <p className="mt-1 text-sm leading-relaxed text-gray-600">
-            Start with the business object, then the chart definition, then the live accounting engine.
-            {activeCoa && (
-              <>
-                {" "}Current demo chart: <span className="font-mono text-gray-800">{activeCoa.coa_id}</span>.
-              </>
-            )}
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-2">
-        {flow.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            className="rounded-full border border-canvas-200 bg-canvas-50 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-white hover:text-brand-700"
-          >
-            {item.label}
-          </Link>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 
 function HeroStat({
   label, value, sub, accent,
@@ -583,9 +159,7 @@ function HeroStat({
   return (
     <div className={cn(
       "rounded-xl px-3.5 py-3 ring-1 ring-inset",
-      accent
-        ? "bg-white ring-brand-100"
-        : "bg-white/60 ring-canvas-200/70",
+      accent ? "bg-white ring-brand-100" : "bg-white/60 ring-canvas-200/70",
     )}>
       <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
         {label}
@@ -602,109 +176,478 @@ function HeroStat({
 }
 
 
-// ── Step card ─────────────────────────────────────────────────────────────
+// ── Workbook → DB evidence shortcut ──────────────────────────────────────
 
-function Step({
-  n, icon: Icon, title, blueprint, prose, stats, link, linkLabel,
-}: {
-  n: number;
-  icon: LucideIcon;
-  title: string;
-  blueprint: string;
-  prose: React.ReactNode;
-  stats: { label: string; value: string }[];
-  link: string;
-  linkLabel: string;
-}) {
+function WorkbookEvidenceCard({ impl }: { impl: ImplResponse | null }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-canvas-200/70 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-      <div className="p-5 md:p-6 flex gap-5">
-        {/* Step number + icon — hidden on mobile to keep copy readable */}
-        <div className="hidden md:flex flex-col items-center gap-2 shrink-0">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
-            Step {n}
-          </span>
-          <div className="h-11 w-11 rounded-2xl bg-brand-50 ring-1 ring-inset ring-brand-100 flex items-center justify-center">
-            <Icon className="h-5 w-5 text-brand-600" />
+    <Link
+      href="/dashboard/blueprint/implementation"
+      className="mt-5 group block rounded-2xl border border-mint-200 bg-gradient-to-br from-mint-50/70 via-white to-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] hover:shadow-[0_4px_12px_rgba(15,23,42,0.06)] transition-shadow"
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="h-10 w-10 shrink-0 rounded-2xl bg-white ring-1 ring-inset ring-mint-200 flex items-center justify-center">
+            <FileSpreadsheet className="h-5 w-5 text-mint-700" />
           </div>
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-2">
-            <h3 className="text-base font-semibold text-gray-900 tracking-tight">
-              {title}
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mint-700">
+              Primary meeting artefact
+            </p>
+            <h3 className="mt-0.5 text-base font-semibold tracking-tight text-gray-900">
+              Workbook → Database evidence
             </h3>
-            <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-gray-400">
-              {blueprint}
-            </span>
-          </div>
-
-          <p className="mt-1.5 text-sm text-gray-600 leading-relaxed">
-            {prose}
-          </p>
-
-          {stats.length > 0 && (
-            <dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              {stats.map((s) => (
-                <div
-                  key={s.label}
-                  className="rounded-lg bg-canvas-50/60 px-3 py-2 ring-1 ring-inset ring-canvas-200/60"
-                >
-                  <dt className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
-                    {s.label}
-                  </dt>
-                  <dd className="mt-0.5 text-sm font-medium text-gray-800 tabular-nums">
-                    {s.value}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          )}
-
-          <div className="mt-4">
-            <Link
-              href={link}
-              className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 hover:text-brand-900 hover:underline"
-            >
-              {linkLabel}
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
+            <p className="mt-1 text-sm text-gray-600 leading-relaxed max-w-2xl">
+              Every tab in <em>{impl?.workbook ?? "the CoA workbook"}</em> mapped to a live
+              Django model + Postgres table. Click any row to drill into the actual data.
+            </p>
           </div>
         </div>
+        {impl && (
+          <div className="grid grid-cols-2 gap-2 shrink-0">
+            <div className="rounded-lg bg-white px-3 py-2 ring-1 ring-inset ring-mint-200">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">Tabs loaded</p>
+              <p className="mt-0.5 text-lg font-semibold tabular-nums text-mint-700">
+                {impl.totals.fully_loaded_count} / {impl.totals.tab_count}
+              </p>
+            </div>
+            <div className="rounded-lg bg-white px-3 py-2 ring-1 ring-inset ring-mint-200">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">Total rows</p>
+              <p className="mt-0.5 text-lg font-semibold tabular-nums text-gray-900">
+                {impl.totals.total_rows.toLocaleString()}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
-    </div>
+      <div className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-mint-700 group-hover:text-mint-800">
+        Open evidence page
+        <ArrowRight className="h-3.5 w-3.5" />
+      </div>
+    </Link>
   );
 }
 
 
-// ── Closing card — what's pending Thomas's sign-off ───────────────────────
+// ── 16-layer architecture map ────────────────────────────────────────────
+
+type LayerStatus = "live" | "partial" | "roadmap";
+interface LayerSpec {
+  n: string;
+  title: string;
+  blurb: string;
+  icon: LucideIcon;
+  status: LayerStatus;
+  link?: string;
+  linkLabel?: string;
+}
+
+const LAYERS: LayerSpec[] = [
+  {
+    n: "1",
+    title: "Client Experience",
+    blurb: "Dashboard cockpit, reporting access, approval inbox.",
+    icon: Inbox,
+    status: "partial",
+    link: "/dashboard",
+    linkLabel: "Open dashboard",
+  },
+  {
+    n: "2",
+    title: "Data Intake",
+    blurb: "Bank CSV import, supplier bills, manual upload.",
+    icon: Landmark,
+    status: "partial",
+    link: "/dashboard/bank",
+    linkLabel: "Bank feed",
+  },
+  {
+    n: "3",
+    title: "Document Intelligence",
+    blurb: "OCR, classification, AI bill drafting from a PDF.",
+    icon: NotebookPen,
+    status: "partial",
+    link: "/dashboard/bills",
+    linkLabel: "Bills (try AI draft)",
+  },
+  {
+    n: "4",
+    title: "Accounting Engine",
+    blurb: "Double-entry validation, period locks, FX, audit trail, VAT, recognition, closing.",
+    icon: BookCheck,
+    status: "live",
+    link: "/dashboard/journal-entries",
+    linkLabel: "Journal entries",
+  },
+  {
+    n: "5",
+    title: "Chart of Accounts",
+    blurb: "Versioned charts, universal mapping layer, source → universal codes.",
+    icon: Layers,
+    status: "live",
+    link: "/dashboard/blueprint/data/coa-definitions",
+    linkLabel: "CoA definitions",
+  },
+  {
+    n: "6",
+    title: "Dimensions & Multi-Entity",
+    blurb: "21 dimensions, hierarchical values, per-entity scoping. Engine refuses bad postings.",
+    icon: Network,
+    status: "live",
+    link: "/dashboard/blueprint/data/dimension-types",
+    linkLabel: "Dimensions",
+  },
+  {
+    n: "7",
+    title: "AI Assistance",
+    blurb: "Bill drafting, anomaly detection, ask-Beakon, narrative reports.",
+    icon: Sparkles,
+    status: "partial",
+    link: "/dashboard/anomalies",
+    linkLabel: "Anomalies",
+  },
+  {
+    n: "8",
+    title: "Workflow",
+    blurb: "Bill / Invoice / JE state machines. Month-end orchestrator pending.",
+    icon: Workflow,
+    status: "partial",
+    link: "/dashboard/approvals",
+    linkLabel: "Approval queue",
+  },
+  {
+    n: "9",
+    title: "Approval & Human Review",
+    blurb: "Four-eyes posting, period locks, change history, rejection reasons.",
+    icon: Shield,
+    status: "live",
+    link: "/dashboard/audit",
+    linkLabel: "Audit log",
+  },
+  {
+    n: "10",
+    title: "Reporting",
+    blurb: "TB, P&L, BS, CF, AR/AP aging, VAT report, account ledger drill-down.",
+    icon: TrendingUp,
+    status: "live",
+    link: "/dashboard/reports",
+    linkLabel: "Reports",
+  },
+  {
+    n: "11",
+    title: "Budgeting",
+    blurb: "Budget setup, variance, forecasting from actuals.",
+    icon: Calculator,
+    status: "roadmap",
+  },
+  {
+    n: "12",
+    title: "Service Delivery",
+    blurb: "Software / software+support / fully-managed tiers; user-role catalogue.",
+    icon: Building2,
+    status: "partial",
+  },
+  {
+    n: "13",
+    title: "Integration",
+    blurb: "Swiss bank API feeds, ELM/Swissdec, e-signature, portfolio data.",
+    icon: Network,
+    status: "roadmap",
+  },
+  {
+    n: "14",
+    title: "Security",
+    blurb: "RBAC, audit logs, HSTS/secure cookies in prod, JWT auth.",
+    icon: Shield,
+    status: "live",
+  },
+  {
+    n: "15",
+    title: "Infrastructure",
+    blurb: "Currently Fly.io; AWS Zurich migration on roadmap for Swiss residency.",
+    icon: Database,
+    status: "partial",
+  },
+  {
+    n: "16",
+    title: "AI Infrastructure",
+    blurb: "Model routing by task complexity, prompt logging, per-client AI usage.",
+    icon: Sparkles,
+    status: "roadmap",
+  },
+];
+
+function ArchitectureLayersSection() {
+  const live = LAYERS.filter((l) => l.status === "live").length;
+  const partial = LAYERS.filter((l) => l.status === "partial").length;
+  const roadmap = LAYERS.filter((l) => l.status === "roadmap").length;
+  return (
+    <section className="mt-8">
+      <div className="flex items-baseline justify-between mb-3">
+        <h2 className="text-base font-semibold text-gray-900">
+          The 16-layer architecture
+        </h2>
+        <p className="text-[11px] text-gray-500">
+          <span className="badge-green">●</span> {live} live ·{" "}
+          <span className="badge-yellow">●</span> {partial} partial ·{" "}
+          <span className="badge-gray">●</span> {roadmap} roadmap
+        </p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {LAYERS.map((l) => (
+          <LayerCard key={l.n} layer={l} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function LayerCard({ layer }: { layer: LayerSpec }) {
+  const Icon = layer.icon;
+  const statusBadge = {
+    live: <span className="badge-green">Live</span>,
+    partial: <span className="badge-yellow">Partial</span>,
+    roadmap: <span className="badge-gray">Roadmap</span>,
+  }[layer.status];
+
+  const inner = (
+    <div className="rounded-xl border border-canvas-200/70 bg-white p-4 h-full hover:shadow-[0_2px_8px_rgba(15,23,42,0.04)] transition-shadow">
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="h-8 w-8 rounded-lg bg-brand-50 ring-1 ring-inset ring-brand-100 flex items-center justify-center">
+          <Icon className="h-4 w-4 text-brand-600" />
+        </div>
+        {statusBadge}
+      </div>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
+        Layer {layer.n}
+      </p>
+      <h3 className="text-sm font-semibold text-gray-900 mt-0.5">{layer.title}</h3>
+      <p className="text-xs text-gray-600 mt-1.5 leading-snug">{layer.blurb}</p>
+      {layer.link && layer.linkLabel && (
+        <p className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-brand-700">
+          {layer.linkLabel}
+          <ArrowRight className="h-3 w-3" />
+        </p>
+      )}
+    </div>
+  );
+  return layer.link ? <Link href={layer.link}>{inner}</Link> : inner;
+}
+
+
+// ── The four engine builds ───────────────────────────────────────────────
+
+interface BuildSpec {
+  n: string;
+  title: string;
+  blurb: string;
+  service: string;
+  link: string;
+  linkLabel: string;
+  icon: LucideIcon;
+}
+
+const BUILDS: BuildSpec[] = [
+  {
+    n: "#1",
+    title: "Disbursements",
+    blurb: "Rebillable cost lines bundle into a draft client invoice. Engine refuses to bill the same line twice.",
+    service: "DisbursementService",
+    link: "/dashboard/disbursements",
+    linkLabel: "Pending rebillables",
+    icon: Send,
+  },
+  {
+    n: "#2",
+    title: "VAT engine",
+    blurb: "Per-line tax codes route Output VAT to the right liability and Input VAT to the right asset. Net = output − input.",
+    service: "TaxCode + VATReportService",
+    link: "/dashboard/reports/vat",
+    linkLabel: "VAT report",
+    icon: Calculator,
+  },
+  {
+    n: "#3",
+    title: "Closing entries",
+    blurb: "Generates the period-close JE: zero every revenue + expense account, offset to Retained Earnings, idempotent.",
+    service: "ClosingEntriesService",
+    link: "/dashboard/periods",
+    linkLabel: "Periods (run close)",
+    icon: CalendarCheck,
+  },
+  {
+    n: "#4",
+    title: "Recognition rules",
+    blurb: "Multi-period prepaid / deferred / accrued allocation. The Nov–Apr $1,000 example from the founder paper.",
+    service: "RecognitionRule + RecognitionService",
+    link: "/dashboard/recognition",
+    linkLabel: "Recognition rules",
+    icon: Repeat,
+  },
+];
+
+function EngineBuildsSection() {
+  return (
+    <section className="mt-8">
+      <div className="flex items-baseline justify-between mb-3">
+        <h2 className="text-base font-semibold text-gray-900">
+          Engine builds shipped
+        </h2>
+        <p className="text-[11px] text-gray-500">
+          Layer 4 (Accounting Engine) extensions from the architecture PDF.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {BUILDS.map((b) => (
+          <BuildCard key={b.n} build={b} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function BuildCard({ build }: { build: BuildSpec }) {
+  const Icon = build.icon;
+  return (
+    <Link
+      href={build.link}
+      className="group block rounded-xl border border-canvas-200/70 bg-white p-4 hover:shadow-[0_2px_8px_rgba(15,23,42,0.04)] transition-shadow"
+    >
+      <div className="flex items-start gap-3">
+        <div className="h-10 w-10 shrink-0 rounded-2xl bg-brand-50 ring-1 ring-inset ring-brand-100 flex items-center justify-center">
+          <Icon className="h-5 w-5 text-brand-600" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
+              Build {build.n}
+            </span>
+            <span className="badge-green">Live</span>
+          </div>
+          <h3 className="mt-0.5 text-sm font-semibold text-gray-900">{build.title}</h3>
+          <p className="text-xs text-gray-600 mt-1.5 leading-snug">{build.blurb}</p>
+          <p className="mt-2 text-[11px] font-mono text-gray-500">{build.service}</p>
+          <p className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-brand-700 group-hover:text-brand-900">
+            {build.linkLabel}
+            <ArrowRight className="h-3 w-3" />
+          </p>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+
+// ── Masters at a glance ──────────────────────────────────────────────────
+
+function MastersAtGlanceSection({
+  impl, loading,
+}: { impl: ImplResponse | null; loading: boolean }) {
+  return (
+    <section className="mt-8">
+      <div className="flex items-baseline justify-between mb-3">
+        <h2 className="text-base font-semibold text-gray-900">
+          Workbook tabs at a glance
+        </h2>
+        <p className="text-[11px] text-gray-500">
+          Live row counts. Click any row to inspect the data.
+        </p>
+      </div>
+      <div className="card p-0 overflow-hidden">
+        {loading ? (
+          <p className="text-sm text-gray-400 py-8 text-center">Loading live counts…</p>
+        ) : !impl ? (
+          <p className="text-sm text-gray-400 py-8 text-center">
+            Could not reach the workbook-implementation endpoint.
+          </p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-[11px] text-gray-400 uppercase tracking-wider border-b border-canvas-100">
+                <th className="py-2 px-3 text-left font-medium">Workbook tab</th>
+                <th className="py-2 px-3 text-center font-medium">Fields</th>
+                <th className="py-2 px-3 text-center font-medium">Rows</th>
+                <th className="py-2 px-3 text-center font-medium">Sample IDs</th>
+                <th className="py-2 px-3 text-right font-medium"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-canvas-100">
+              {impl.tabs.map((t) => (
+                <tr key={t.db_table} className="hover:bg-canvas-50">
+                  <td className="py-2 px-3 font-medium text-gray-900 whitespace-nowrap">
+                    {t.tab}
+                    {t.type === "extension" && (
+                      <span className="ml-2 text-[10px] uppercase tracking-wider text-blue-700 font-semibold">ext.</span>
+                    )}
+                  </td>
+                  <td className="py-2 px-3 text-center tabular-nums text-gray-700">{t.field_count}</td>
+                  <td className="py-2 px-3 text-center tabular-nums">
+                    {t.row_count > 0 ? (
+                      <span className="inline-flex items-center gap-1 font-medium text-mint-700">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> {t.row_count}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-gray-400">
+                        <MinusCircle className="w-3.5 h-3.5" /> 0
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 px-3 text-center text-[11px] font-mono text-gray-500">
+                    {t.sample_ids.length > 0 ? t.sample_ids.slice(0, 2).join(", ") : "—"}
+                  </td>
+                  <td className="py-2 px-3 text-right">
+                    <Link href={t.url} className="text-xs text-brand-700 hover:underline whitespace-nowrap">
+                      View <ArrowRight className="inline w-3 h-3" />
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
+  );
+}
+
+
+// ── Pending / build queue ────────────────────────────────────────────────
 
 function PendingCard() {
   const pending = [
-    { k: "Instrument master",      v: "Ticker, ISIN, share count, cost basis" },
-    { k: "Market valuation",       v: "Live price feed + unrealised gain/loss" },
-    { k: "FX revaluation",         v: "Month-end revalue of non-functional lines" },
-    { k: "Consolidated reporting", v: "Family-office roll-up across entities" },
-    { k: "Tax buckets",            v: "VAT / withholding / capital-gains schedules" },
-    { k: "Instrument events",      v: "Coupons, splits, corporate actions" },
+    { k: "Loan accrual engine",
+      v: "Auto-accrue interest by day-count convention on the Loan masters we already store" },
+    { k: "Capital-call burndown",
+      v: "Post the JE on a capital call and decrement Commitment.unfunded_balance" },
+    { k: "Tax-lot disposal P&L",
+      v: "Match SELL events to lots via FIFO/LIFO/HIFO + post realised G/L" },
+    { k: "Pension valuation engine",
+      v: "Vesting + contribution accrual against the Pension master" },
+    { k: "Management-report currency (3rd tier)",
+      v: "Notes-tab TODO — beyond functional + reporting currencies" },
+    { k: "Intercompany related-company semantics",
+      v: "Notes-tab TODO — relationship logic beyond IntercompanyGroup" },
+    { k: "Pension / Commitment column lists",
+      v: "Masters scaffolded; Thomas to define columns like he did for the other tabs" },
+    { k: "Budget module",
+      v: "Layer 11 — multi-entity budgets, scenario planning, cash-flow forecasting" },
   ];
   return (
-    <div className="mt-8 rounded-2xl border border-amber-200/70 bg-amber-50/30 p-5 md:p-6">
+    <section className="mt-8 rounded-2xl border border-amber-200/70 bg-amber-50/30 p-5 md:p-6">
       <div className="flex items-start gap-3">
         <div className="h-10 w-10 shrink-0 rounded-2xl bg-white ring-1 ring-inset ring-amber-100 flex items-center justify-center">
           <Sparkles className="h-5 w-5 text-amber-600" />
         </div>
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700">
-            Pending your accounting sign-off
+            Build queue
           </p>
           <h3 className="mt-0.5 text-base font-semibold text-gray-900 tracking-tight">
-            What we haven't built — on purpose
+            What&apos;s next on the roadmap
           </h3>
           <p className="mt-1 text-sm text-gray-600 leading-relaxed max-w-2xl">
-            The Phase 1 spine is complete. These six items are the natural next layer for a
-            family-office investment book — but each one touches accounting treatment, so the
-            blueprint rule applies: Thomas defines the shape, then we build.
+            The structural spine and the four engine builds are live. Below are the
+            time-and-value engines plus the Notes-tab TODOs that need Thomas alignment
+            before they ship.
           </p>
         </div>
       </div>
@@ -720,6 +663,6 @@ function PendingCard() {
           </li>
         ))}
       </ul>
-    </div>
+    </section>
   );
 }

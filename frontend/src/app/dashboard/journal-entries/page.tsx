@@ -4,9 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { FileText, Search, Sparkles, X } from "lucide-react";
+import { FileText, Search, Sparkles, X, Plus, Paperclip } from "lucide-react";
 import { api, API_BASE } from "@/lib/api";
 import { fmt2, fmtDate, fmtLabel } from "@/lib/format";
+import TransactionTypePicker, { type TxType } from "@/components/transaction-type-picker";
+import {
+  GeneralJEDrawer, PortfolioTradeDrawer, LoanTxnDrawer, FixedAssetDrawer,
+} from "@/components/transaction-drawers";
 
 
 interface EntityOpt { id: number; code: string; name: string; functional_currency: string; }
@@ -49,16 +53,30 @@ interface JESummary {
   currency: string;
   functional_currency: string;
   period: string | null;
+  document_count?: number;
 }
 
 
 export default function JournalEntriesPage() {
+  const router = useRouter();
   const search = useSearchParams();
   const [entries, setEntries] = useState<JESummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState(search.get("status") ?? "");
   const [q, setQ] = useState("");
   const [billModal, setBillModal] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Which typed drawer is open (one at a time). null = none.
+  const [openDrawer, setOpenDrawer] = useState<TxType | null>(null);
+
+  function handlePickType(t: TxType) {
+    // AP / AR have their own dedicated pages with battle-tested drawers —
+    // route there with ?new=1 so the create drawer auto-opens. The other
+    // four open inline drawers on this page.
+    if (t === "ap") { router.push("/dashboard/bills?new=1"); return; }
+    if (t === "ar") { router.push("/dashboard/invoices?new=1"); return; }
+    setOpenDrawer(t);
+  }
 
   useEffect(() => {
     const params: Record<string, string> = { limit: "500" };
@@ -88,13 +106,44 @@ export default function JournalEntriesPage() {
             Every transaction in the ledger. Every write goes through the approval state machine.
           </p>
         </div>
-        <button onClick={() => setBillModal(true)} className="btn-primary">
-          <Sparkles className="w-4 h-4 mr-1.5" /> Upload Bill (AI)
+        <button onClick={() => setPickerOpen(true)} className="btn-primary">
+          <Plus className="w-4 h-4 mr-1.5" /> New Transaction
         </button>
       </div>
+
+      {/* Type picker is the new entry point per Thomas's voice note (2026-04-25):
+          every JE creation flow leads with a Transaction Type field. The picker
+          routes the user into the right purpose-built form. The AI Suggest
+          banner opens the existing OCR upload modal. */}
+      <TransactionTypePicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onPick={handlePickType}
+        onPickAISuggest={() => setBillModal(true)}
+      />
       {billModal && (
         <UploadBillModal onClose={() => setBillModal(false)} />
       )}
+
+      {/* Typed drawers — one per Thomas's transaction types that don't
+          already live on a dedicated screen. AP/AR route to /bills and
+          /invoices with ?new=1 so their existing create drawers open. */}
+      <GeneralJEDrawer
+        open={openDrawer === "general"}
+        onClose={() => setOpenDrawer(null)}
+      />
+      <PortfolioTradeDrawer
+        open={openDrawer === "portfolio_trade"}
+        onClose={() => setOpenDrawer(null)}
+      />
+      <LoanTxnDrawer
+        open={openDrawer === "loan"}
+        onClose={() => setOpenDrawer(null)}
+      />
+      <FixedAssetDrawer
+        open={openDrawer === "fixed_asset"}
+        onClose={() => setOpenDrawer(null)}
+      />
 
       <div className="card p-4">
         <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -155,7 +204,17 @@ export default function JournalEntriesPage() {
                     <td className="py-2.5 pr-4 text-xs text-gray-700 font-mono">{e.entity_code}</td>
                     <td className="py-2.5 pr-4 text-xs text-gray-500 whitespace-nowrap">{fmtDate(e.date)}</td>
                     <td className="py-2.5 pr-4 text-xs text-gray-500">{fmtLabel(e.source_type)}</td>
-                    <td className="py-2.5 pr-4 text-sm text-gray-800 max-w-sm truncate">{e.memo || "—"}</td>
+                    <td className="py-2.5 pr-4 text-sm text-gray-800 max-w-sm truncate">
+                      <span className="inline-flex items-center gap-1.5">
+                        {(e.document_count ?? 0) > 0 && (
+                          <Paperclip
+                            className="w-3 h-3 text-gray-400 shrink-0"
+                            aria-label={`${e.document_count} attachment${e.document_count === 1 ? "" : "s"}`}
+                          />
+                        )}
+                        <span className="truncate">{e.memo || "—"}</span>
+                      </span>
+                    </td>
                     <td className="py-2.5 pl-4 text-right text-gray-900 font-mono text-xs tabular-nums whitespace-nowrap">
                       {fmt2(e.total)} <span className="text-gray-400">{e.functional_currency}</span>
                     </td>
@@ -188,7 +247,7 @@ function UploadBillModal({ onClose }: { onClose: () => void }) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
-    api.get<{ results: EntityOpt[] } | EntityOpt[]>("/beakon/entities/")
+    api.get<{ results: EntityOpt[] } | EntityOpt[]>("/beakon/entities/", { is_active: "true" })
       .then((d) => {
         const list = Array.isArray(d) ? d : (d.results ?? []);
         setEntities(list);

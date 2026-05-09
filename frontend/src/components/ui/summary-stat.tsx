@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 interface SummaryStatProps {
   label: string;
-  value: string | number;
+  value: React.ReactNode;
   hint?: React.ReactNode;
   icon?: LucideIcon;
   tone?: "default" | "brand" | "mint" | "amber" | "rose" | "indigo";
@@ -43,9 +43,9 @@ export function SummaryStat({
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
             {label}
           </p>
-          <p className="mt-1 text-[22px] font-semibold tabular-nums text-gray-900 tracking-tight leading-none">
+          <div className="mt-1 text-[22px] font-semibold tabular-nums text-gray-900 tracking-tight leading-none">
             {value}
-          </p>
+          </div>
           {hint && <div className="mt-1.5 text-[11px] text-gray-500 leading-snug">{hint}</div>}
         </div>
         {Icon && (

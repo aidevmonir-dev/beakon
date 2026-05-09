@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
-  ArrowLeft, Upload, X, Check, Ban, Undo2, Sparkles,
+  ArrowLeft, Upload, X, Check, Ban, Undo2, Sparkles, ChevronRight,
   Landmark, Building, User, ListTree, Coins, Hash, RefreshCcw, AlertCircle,
 } from "lucide-react";
 import { api, API_BASE } from "@/lib/api";
@@ -128,6 +128,7 @@ export default function BankDetailPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importModal, setImportModal] = useState(false);
+  const [aiImport, setAiImport] = useState(false);
   const [catTarget, setCatTarget] = useState<Txn | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -135,7 +136,15 @@ export default function BankDetailPage() {
     try {
       const [b, a] = await Promise.all([
         api.get<BankAccount>(`/beakon/bank-accounts/${params.id}/`),
-        api.get<{ results: CoaAccount[] } | CoaAccount[]>("/beakon/accounts/").then((d) =>
+        // Pull every active account in one shot (page_size=500). Without
+        // this, DRF paginates and the AI-suggested account may live on
+        // page 2+ — the dropdown then has no matching <option>, the
+        // controlled select silently shows the placeholder, and clicking
+        // "Get AI suggestion" appears to do nothing in the offset field.
+        api.get<{ results: CoaAccount[] } | CoaAccount[]>(
+          "/beakon/accounts/",
+          { is_active: "true", page_size: "500" },
+        ).then((d) =>
           Array.isArray(d) ? d : (d.results ?? []),
         ),
       ]);
@@ -305,7 +314,10 @@ export default function BankDetailPage() {
                 <RefreshCcw className={cn("w-4 h-4 mr-1.5", refreshing && "animate-spin")} />
                 Refresh
               </button>
-              <button onClick={() => setImportModal(true)} className="btn-primary">
+              <button onClick={() => setAiImport(true)} className="btn-primary">
+                <Sparkles className="w-4 h-4 mr-1.5" /> Import with AI
+              </button>
+              <button onClick={() => setImportModal(true)} className="btn-secondary">
                 <Upload className="w-4 h-4 mr-1.5" /> Import CSV
               </button>
             </>
@@ -317,7 +329,7 @@ export default function BankDetailPage() {
       <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <SummaryStat
           label="Current balance"
-          value={`${currentBalance < 0 ? "−" : ""}${fmt2(Math.abs(currentBalance))} ${ba.currency}`}
+          value={`${ba.currency} ${currentBalance < 0 ? "−" : ""}${fmt2(Math.abs(currentBalance))}`}
           hint={
             txns.length > 0
               ? `${txns.filter((t) => t.status !== "ignored").length} txns applied`
@@ -461,6 +473,15 @@ export default function BankDetailPage() {
           onImported={async () => { setImportModal(false); await loadTxns(); }}
           busy={importing}
           setBusy={setImporting}
+        />
+      )}
+
+      {aiImport && (
+        <AIImportModal
+          bankAccountId={ba.id}
+          currency={ba.currency}
+          onClose={() => setAiImport(false)}
+          onImported={async () => { setAiImport(false); await loadTxns(); }}
         />
       )}
 
@@ -795,7 +816,18 @@ function CategorizeModal({
   onDone: () => Promise<void>;
 }) {
   const [offsetId, setOffsetId] = useState("");
-  const [memo, setMemo] = useState("");
+  // Pre-fill memo from the bank statement description so the resulting
+  // JE has context when viewed later. The user can edit/clear; we trim
+  // overlong descriptions so the textarea isn't pre-filled with a wall
+  // of text. ``txn`` is captured by closure — re-deriving via useState
+  // initializer keeps this a one-shot at modal open.
+  const initialMemo = (txn.description || "").trim().slice(0, 200);
+  const [memo, setMemo] = useState(initialMemo);
+  // Track whether the user has hand-edited the memo. When AI suggestion
+  // arrives we enrich the memo with the model's reasoning, but only if
+  // the user hasn't typed anything custom yet — never overwrite their
+  // input.
+  const [memoEdited, setMemoEdited] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
@@ -829,6 +861,15 @@ function CategorizeModal({
       };
       setAiSuggestion(suggestion);
       if (!offsetId) setOffsetId(String(suggestion.account_id));
+      // Enrich the memo with the AI's reasoning, but only when the user
+      // hasn't typed something custom. Format: "<bank desc> — AI: <reasoning>".
+      // Falls back to "AI: <reasoning>" alone if the bank description
+      // was empty. The reasoning is short (model returns under 80 chars)
+      // so the combined memo stays readable in the JE list.
+      if (!memoEdited && suggestion.reasoning) {
+        const prefix = initialMemo ? `${initialMemo} — ` : "";
+        setMemo(`${prefix}AI: ${suggestion.reasoning}`.slice(0, 500));
+      }
     } catch (e: any) {
       setAiErr(e?.error?.message || e?.message || "AI suggestion failed");
     } finally {
@@ -887,7 +928,7 @@ function CategorizeModal({
                 "font-mono text-sm tabular-nums font-semibold shrink-0",
                 amt >= 0 ? "text-mint-700" : "text-red-600",
               )}>
-                {amt >= 0 ? "+" : "−"}{fmt2(Math.abs(amt))} {txn.currency}
+                {txn.currency} {amt >= 0 ? "+" : "−"}{fmt2(Math.abs(amt))}
               </div>
             </div>
           </div>
@@ -947,7 +988,8 @@ function CategorizeModal({
             )}
             {!aiSuggestion && !aiBusy && !aiErr && (
               <p className="mt-1 text-[11px] text-gray-500">
-                Local Ollama reads the description + amount and picks the best offset account.
+                AI reads the description + amount and picks the best offset account
+                from your chart. Suggestion only — you review and approve before any JE posts.
               </p>
             )}
           </div>
@@ -972,8 +1014,20 @@ function CategorizeModal({
             </span>
           </label>
           <label className="block">
-            <span className="text-xs font-medium text-gray-700">Memo <span className="text-gray-400 font-normal">(optional)</span></span>
-            <input className="input mt-1" value={memo} onChange={(e) => setMemo(e.target.value)} />
+            <span className="text-xs font-medium text-gray-700">
+              Memo <span className="text-gray-400 font-normal">(optional)</span>
+            </span>
+            <textarea
+              className="input mt-1 resize-y"
+              rows={2}
+              value={memo}
+              onChange={(e) => { setMemo(e.target.value); setMemoEdited(true); }}
+              placeholder="What this transaction is for. Pre-filled from the bank description — edit if helpful."
+              maxLength={500}
+            />
+            <span className="text-[11px] text-gray-400 block mt-0.5">
+              Lands on the resulting JE so reviewers can see what this is without opening the bank line.
+            </span>
           </label>
 
           {err && (
@@ -992,6 +1046,311 @@ function CategorizeModal({
           <p className="text-[11px] text-gray-400">
             A draft journal entry is created. It must be submitted and approved by a different user before it posts.
           </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ── AI bank-statement import modal ──────────────────────────────────────
+
+interface AIPreviewTxn {
+  date: string;
+  description: string;
+  amount: string;
+  balance_after?: string | null;
+  currency?: string | null;
+  dedup_match?: boolean;
+}
+
+interface AIPreviewResp {
+  filename: string;
+  statement_period_start?: string | null;
+  statement_period_end?: string | null;
+  account_iban?: string | null;
+  currency?: string | null;
+  opening_balance?: string | null;
+  closing_balance?: string | null;
+  transactions: AIPreviewTxn[];
+}
+
+interface AICommitResp {
+  feed_import_id: number;
+  imported: number;
+  duplicates: number;
+  errors: { row: number; error: string }[];
+}
+
+
+function AIImportModal({
+  bankAccountId, currency, onClose, onImported,
+}: {
+  bankAccountId: number;
+  currency: string;
+  onClose: () => void;
+  onImported: () => Promise<void>;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [preview, setPreview] = useState<AIPreviewResp | null>(null);
+  const [committed, setCommitted] = useState<AICommitResp | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const onUpload = async () => {
+    if (!file) return;
+    setBusy(true); setErr(null); setCommitted(null); setPreview(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const token = localStorage.getItem("access_token");
+      const orgId = localStorage.getItem("organization_id");
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      if (orgId) headers["X-Organization-ID"] = orgId;
+      const resp = await fetch(
+        `${API_BASE}/beakon/bank-accounts/${bankAccountId}/ai-preview/`,
+        { method: "POST", headers, body: fd },
+      );
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data?.error?.message || data?.detail || "Upload failed");
+      setPreview(data as AIPreviewResp);
+    } catch (e: any) {
+      setErr(e?.message || "Upload failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateRow = (idx: number, patch: Partial<AIPreviewTxn>) => {
+    if (!preview) return;
+    const next = preview.transactions.slice();
+    next[idx] = { ...next[idx], ...patch };
+    setPreview({ ...preview, transactions: next });
+  };
+
+  const removeRow = (idx: number) => {
+    if (!preview) return;
+    setPreview({
+      ...preview,
+      transactions: preview.transactions.filter((_, i) => i !== idx),
+    });
+  };
+
+  const onCommit = async () => {
+    if (!preview) return;
+    setBusy(true); setErr(null);
+    try {
+      const result = await api.post<AICommitResp>(
+        `/beakon/bank-accounts/${bankAccountId}/ai-commit/`,
+        { transactions: preview.transactions, filename: preview.filename },
+      );
+      setCommitted(result);
+    } catch (e: any) {
+      setErr(e?.detail || e?.message || "Commit failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const newCount = preview
+    ? preview.transactions.filter((t) => !t.dedup_match).length
+    : 0;
+  const dupCount = preview
+    ? preview.transactions.filter((t) => t.dedup_match).length
+    : 0;
+
+  return (
+    <div className="fixed inset-0 z-40 flex" role="dialog" aria-modal="true">
+      <div className="flex-1 bg-black/30" onClick={onClose} />
+      <div className="w-full sm:w-[720px] bg-white border-l border-canvas-200 overflow-y-auto">
+        <div className="flex items-center justify-between p-4 border-b border-canvas-100 sticky top-0 bg-white z-10">
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-brand-700" /> AI Bank Statement Import
+          </h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          {committed ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Check className="w-5 h-5 text-emerald-700" />
+                <p className="text-sm font-semibold text-emerald-900">
+                  Imported {committed.imported} transactions
+                </p>
+              </div>
+              {committed.duplicates > 0 && (
+                <p className="text-xs text-emerald-800">
+                  Skipped {committed.duplicates} duplicate{committed.duplicates === 1 ? "" : "s"}.
+                </p>
+              )}
+              {committed.errors.length > 0 && (
+                <p className="text-xs text-rose-700">
+                  {committed.errors.length} row{committed.errors.length === 1 ? "" : "s"} couldn't be parsed.
+                </p>
+              )}
+              <div className="mt-3">
+                <button onClick={async () => { await onImported(); }} className="btn-primary">
+                  See transactions <ChevronRight className="w-4 h-4 ml-1" />
+                </button>
+              </div>
+            </div>
+          ) : !preview ? (
+            <>
+              <p className="text-xs text-gray-500">
+                Drop a PDF, image, or CSV bank statement. Claude reads it and extracts every transaction
+                — you review and edit before anything is written.
+              </p>
+              <div
+                className="border border-dashed border-canvas-200 rounded-lg p-6 text-center cursor-pointer hover:border-brand-400 hover:bg-brand-50/40 transition"
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const f = e.dataTransfer.files?.[0];
+                  if (f) setFile(f);
+                }}
+              >
+                {file ? (
+                  <div className="flex items-center justify-center gap-2 text-sm text-gray-700">
+                    <Upload className="w-4 h-4 text-brand-700" /> {file.name}
+                  </div>
+                ) : (
+                  <>
+                    <Upload className="w-6 h-6 mx-auto mb-2 text-gray-400" />
+                    <p className="text-sm text-gray-600">Drop a file here or click to choose</p>
+                    <p className="text-[11px] text-gray-400 mt-1">.pdf · .csv · .jpg · .png</p>
+                  </>
+                )}
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept=".pdf,.csv,.tsv,.txt,.jpg,.jpeg,.png,.webp"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+              />
+              {err && (
+                <div className="px-3 py-2 rounded bg-rose-50 text-rose-700 text-xs flex items-start gap-2">
+                  <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {err}
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+                <button onClick={onUpload} disabled={!file || busy} className="btn-primary">
+                  {busy ? "Asking Claude…" : (<>Analyze with AI <ChevronRight className="w-4 h-4 ml-1" /></>)}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="rounded-lg border border-canvas-200 bg-canvas-50 p-3 text-xs text-gray-700 grid grid-cols-2 gap-2">
+                <div><span className="text-gray-400">File:</span> <span className="font-mono">{preview.filename}</span></div>
+                <div><span className="text-gray-400">Currency:</span> {preview.currency || currency}</div>
+                {preview.statement_period_start && (
+                  <div><span className="text-gray-400">Period:</span> {preview.statement_period_start} → {preview.statement_period_end || "?"}</div>
+                )}
+                {preview.account_iban && (
+                  <div><span className="text-gray-400">IBAN:</span> <span className="font-mono">{preview.account_iban}</span></div>
+                )}
+                {preview.opening_balance && (
+                  <div><span className="text-gray-400">Opening:</span> {preview.opening_balance}</div>
+                )}
+                {preview.closing_balance && (
+                  <div><span className="text-gray-400">Closing:</span> {preview.closing_balance}</div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between text-xs">
+                <div>
+                  <span className="font-semibold text-gray-900">{newCount} new</span>
+                  {dupCount > 0 && <span className="text-amber-700 ml-2">{dupCount} already imported (skipped)</span>}
+                </div>
+                <button onClick={() => { setPreview(null); setFile(null); }} className="text-gray-500 hover:text-gray-800 underline">
+                  Start over
+                </button>
+              </div>
+
+              <div className="border border-canvas-200 rounded-lg overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-canvas-50 text-[11px] uppercase tracking-wider text-gray-500">
+                    <tr>
+                      <th className="px-2 py-2 text-left">Date</th>
+                      <th className="px-2 py-2 text-left">Description</th>
+                      <th className="px-2 py-2 text-right">Amount</th>
+                      <th className="px-2 py-2 text-right">Balance</th>
+                      <th className="px-2 py-2 w-8" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-canvas-100">
+                    {preview.transactions.map((t, idx) => {
+                      const amt = parseFloat(t.amount || "0");
+                      const isDeposit = amt >= 0;
+                      return (
+                        <tr key={idx} className={t.dedup_match ? "bg-amber-50/40" : ""}>
+                          <td className="px-2 py-1.5">
+                            <input
+                              className="w-full px-1.5 py-0.5 font-mono text-[11px] border-transparent rounded hover:bg-white focus:bg-white focus:border-brand-300 focus:outline-none"
+                              value={t.date}
+                              onChange={(e) => updateRow(idx, { date: e.target.value })}
+                            />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <input
+                              className="w-full px-1.5 py-0.5 border-transparent rounded hover:bg-white focus:bg-white focus:border-brand-300 focus:outline-none"
+                              value={t.description}
+                              onChange={(e) => updateRow(idx, { description: e.target.value })}
+                            />
+                          </td>
+                          <td className={cn(
+                            "px-2 py-1.5 text-right font-mono",
+                            isDeposit ? "text-emerald-700" : "text-rose-700",
+                          )}>
+                            <input
+                              className="w-full text-right px-1.5 py-0.5 font-mono border-transparent rounded hover:bg-white focus:bg-white focus:border-brand-300 focus:outline-none"
+                              value={t.amount}
+                              onChange={(e) => updateRow(idx, { amount: e.target.value })}
+                            />
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono text-gray-500">
+                            {t.balance_after || "—"}
+                          </td>
+                          <td className="px-2 py-1.5 text-right">
+                            {t.dedup_match && (
+                              <span className="text-[10px] uppercase tracking-wider font-semibold text-amber-600 mr-1.5" title="Already imported earlier">DUP</span>
+                            )}
+                            <button
+                              onClick={() => removeRow(idx)}
+                              className="text-gray-300 hover:text-rose-600"
+                              aria-label="Remove">
+                              <X className="w-3.5 h-3.5 inline" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {err && (
+                <div className="px-3 py-2 rounded bg-rose-50 text-rose-700 text-xs flex items-start gap-2">
+                  <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {err}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+                <button onClick={onCommit} disabled={busy || newCount === 0} className="btn-primary">
+                  {busy ? "Writing…" : (<>Commit {newCount} transactions <Check className="w-4 h-4 ml-1" /></>)}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

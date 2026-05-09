@@ -30,7 +30,24 @@ from .journal import (  # noqa: F401
     ApprovalAction,
 )
 from .documents import SourceDocument  # noqa: F401
+from .tax import TaxCode  # noqa: F401
+from .recognition import RecognitionRule, RecognitionSchedule  # noqa: F401
+from .workflow_diagram import WorkflowDiagram  # noqa: F401
+from .posting_rules import PostingRule  # noqa: F401
 from .parties import Vendor, Customer  # noqa: F401
 from .ap import Bill, BillLine  # noqa: F401
 from .ar import Invoice, InvoiceLine  # noqa: F401
-from .masters import Instrument, Loan, Portfolio, TaxLot  # noqa: F401
+from .masters import (  # noqa: F401
+    BankAccount as BankAccountMaster,
+    Commitment,
+    Counterparty,
+    Custodian,
+    Instrument,
+    Loan,
+    Pension,
+    Policy,
+    Portfolio,
+    Property,
+    RelatedParty,
+    TaxLot,
+)

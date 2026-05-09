@@ -427,12 +427,21 @@ class ReportsService:
             if dr == ZERO and cr == ZERO:
                 continue
             net = dr - cr  # positive = debit side
+            # Entity context for consolidated views — accounts may be
+            # entity-scoped (one Operating Bank per entity, all coded
+            # 1010) or shared (entity=None). Without this, the consolidated
+            # TB shows N rows of "1010 Operating Bank" with no way to tell
+            # them apart. Per Thomas's blueprint: every figure must be
+            # traceable to its source.
+            entity_obj = getattr(acc, "entity", None)
             result.append({
                 "account_id": acc_id,
                 "code": acc.code,
                 "name": acc.name,
                 "account_type": acc.account_type,
                 "account_subtype": acc.account_subtype,
+                "entity_code": entity_obj.code if entity_obj else None,
+                "entity_name": entity_obj.name if entity_obj else None,
                 "debit": _s(dr),
                 "credit": _s(cr),
                 "net": _s(net),
@@ -699,8 +708,19 @@ class ReportsService:
         Unlike the other reports this one includes ALL statuses (not just
         posted) so the UI can show the approval queue. Filter via ``status``.
         """
-        qs = JournalEntry.objects.select_related("entity", "period", "created_by",
-                                                  "approved_by", "posted_by")
+        from django.db.models import Count, Q
+
+        qs = (
+            JournalEntry.objects
+            .select_related("entity", "period", "created_by",
+                            "approved_by", "posted_by")
+            .annotate(
+                document_count=Count(
+                    "documents",
+                    filter=Q(documents__is_deleted=False),
+                ),
+            )
+        )
         if entity is not None:
             qs = qs.filter(entity=entity)
         elif organization is not None:
@@ -736,6 +756,7 @@ class ReportsService:
                 "approved_by": je.approved_by.email if je.approved_by_id else None,
                 "posted_by": je.posted_by.email if je.posted_by_id else None,
                 "posted_at": je.posted_at.isoformat() if je.posted_at else None,
+                "document_count": je.document_count,
             })
         return {
             "report_type": "journal_listing",

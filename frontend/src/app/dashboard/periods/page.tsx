@@ -3,7 +3,7 @@
 /* Fiscal periods — scoped per-entity (different entities can have different
  * close states). Create new periods + soft-close / hard-close / reopen. */
 import { useEffect, useMemo, useState } from "react";
-import { Calendar, Plus, Lock, Unlock, X, Repeat } from "lucide-react";
+import { Calendar, Plus, Lock, Unlock, X, Repeat, BookCheck } from "lucide-react";
 import { api } from "@/lib/api";
 import { fmtDate, fmtLabel } from "@/lib/format";
 
@@ -44,7 +44,7 @@ export default function PeriodsPage() {
   const load = async () => {
     setLoading(true);
     const [ents, pers] = await Promise.all([
-      api.get<{ results: Entity[] } | Entity[]>("/beakon/entities/").then((d) =>
+      api.get<{ results: Entity[] } | Entity[]>("/beakon/entities/", { is_active: "true" }).then((d) =>
         Array.isArray(d) ? d : (d.results ?? []),
       ).catch(() => []),
       api.get<{ results: Period[] } | Period[]>("/beakon/periods/").then((d) =>
@@ -78,6 +78,31 @@ export default function PeriodsPage() {
       await load();
     } catch (e: any) {
       alert(e?.error?.message || "Failed");
+    }
+  };
+
+  const runClosing = async (p: Period) => {
+    if (!confirm(
+      `Run closing entries for ${p.name} (entity ${p.entity_code})?\n\n` +
+      `This posts a balanced JE that zeros every revenue + expense account ` +
+      `and offsets the net to Retained Earnings. Idempotent — re-running is refused.`,
+    )) return;
+    try {
+      const r = await api.post<{
+        journal_entry_number: string;
+        revenue_total: string;
+        expense_total: string;
+        net_income: string;
+        line_count: number;
+      }>(`/beakon/periods/${p.id}/run-closing-entries/`, {});
+      alert(
+        `Closing JE ${r.journal_entry_number} posted.\n\n` +
+        `Revenue: ${r.revenue_total}\nExpenses: ${r.expense_total}\n` +
+        `Net income: ${r.net_income} (${r.line_count} P&L line${r.line_count !== 1 ? "s" : ""})`,
+      );
+      await load();
+    } catch (e: any) {
+      alert(e?.error?.message || e?.message || "Closing failed");
     }
   };
 
@@ -167,6 +192,12 @@ export default function PeriodsPage() {
                                 className="text-xs text-brand-700 hover:underline"
                                 title="Run FX revaluation as of this period's end date">
                           <Repeat className="w-3 h-3 inline mr-0.5" />FX reval
+                        </button>
+                        <span className="text-gray-300">·</span>
+                        <button onClick={() => runClosing(p)}
+                                className="text-xs text-brand-700 hover:underline"
+                                title="Generate the closing JE: zero P&L into Retained Earnings">
+                          <BookCheck className="w-3 h-3 inline mr-0.5" />Run close
                         </button>
                         <span className="text-gray-300">·</span>
                         {p.status === "open" && (

@@ -1,6 +1,11 @@
 """API for Beakon's first feeder (bank CSV import)."""
 import json
 
+from django.db.models import (
+    DecimalField, ExpressionWrapper, F, Q, Sum,
+)
+from django.db.models.functions import Coalesce
+from decimal import Decimal as _Decimal
 from rest_framework import generics, status as http
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -20,7 +25,15 @@ from api.serializers.beakon_banking import (
 )
 from beakon_banking.exceptions import BankingError
 from beakon_banking.models import BankAccount, BankTransaction, FeedImport
-from beakon_banking.services import AIBankCategorizer, Categorizer, CSVImporter
+from beakon_core.models import Entity as _Entity
+from beakon_banking.services import (
+    AIBankCategorizer,
+    AIBankStatementImportService,
+    BankReconciliationService,
+    Categorizer,
+    CSVImporter,
+    MLBankCategorizer,
+)
 from beakon_core.models import Account
 
 
@@ -39,9 +52,28 @@ class BankAccountViewSet(ModelViewSet):
     ordering_fields = ["name", "created_at"]
 
     def get_queryset(self):
-        return BankAccount.objects.filter(
-            organization=self.request.organization,
-        ).select_related("entity", "account")
+        # gl_balance = sum(debit - credit) on the linked CoA account from
+        # POSTED journal lines only. Drafts and pending entries don't move
+        # the bank balance — only posted ledger movement does.
+        signed = ExpressionWrapper(
+            F("account__journal_lines__debit") - F("account__journal_lines__credit"),
+            output_field=DecimalField(max_digits=19, decimal_places=4),
+        )
+        return (
+            BankAccount.objects
+            .filter(organization=self.request.organization)
+            .select_related("entity", "account")
+            .annotate(
+                gl_balance=Coalesce(
+                    Sum(
+                        signed,
+                        filter=Q(account__journal_lines__journal_entry__status="posted"),
+                    ),
+                    _Decimal("0"),
+                    output_field=DecimalField(max_digits=19, decimal_places=4),
+                ),
+            )
+        )
 
     def perform_create(self, serializer):
         serializer.save(
@@ -84,6 +116,76 @@ class BankAccountViewSet(ModelViewSet):
             user=request.user,
         )
         return Response(FeedImportSerializer(feed).data, status=http.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="ai-preview",
+            parser_classes=[MultiPartParser, FormParser])
+    def ai_preview(self, request, pk=None):
+        """Upload a bank statement (PDF / CSV / image); Claude returns
+        structured transactions for review. Nothing is written yet."""
+        ba = self.get_object()
+        f = request.FILES.get("file")
+        if not f:
+            return Response(
+                {"detail": "Upload a file under the 'file' field."},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            preview = AIBankStatementImportService.preview(
+                bank_account=ba,
+                file_bytes=f.read(),
+                content_type=getattr(f, "content_type", "") or "",
+                filename=f.name,
+            )
+        except BankingError as exc:
+            return _err(exc)
+        return Response(preview)
+
+    @action(detail=True, methods=["post"], url_path="ai-commit",
+            parser_classes=[JSONParser])
+    def ai_commit(self, request, pk=None):
+        """Body: ``{transactions: [...], filename?: str}``. Writes
+        BankTransaction rows + a FeedImport audit row."""
+        ba = self.get_object()
+        rows = request.data.get("transactions") or []
+        if not isinstance(rows, list) or not rows:
+            return Response(
+                {"detail": "Body must include a non-empty 'transactions' array."},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            result = AIBankStatementImportService.commit(
+                bank_account=ba,
+                rows=rows,
+                filename=request.data.get("filename") or "",
+                user=request.user,
+            )
+        except BankingError as exc:
+            return _err(exc)
+        return Response(result)
+
+    @action(detail=True, methods=["get"], url_path="reconciliation")
+    def reconciliation(self, request, pk=None):
+        """Read-only bank reconciliation report for one account.
+
+        Query: ``?as_of=YYYY-MM-DD`` (defaults to today).
+
+        Returns the bank balance, GL balance, matched/outstanding lists,
+        the classic reconciling-items summary, and auto-suggested matches
+        between unmatched bank txns and unmatched GL lines (amount + date
+        within ±5 days). Nothing is persisted.
+        """
+        from datetime import date as _date
+        ba = self.get_object()
+        raw = request.query_params.get("as_of")
+        try:
+            as_of = _date.fromisoformat(raw) if raw else _date.today()
+        except ValueError:
+            return Response(
+                {"detail": "as_of must be YYYY-MM-DD."},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+        report = BankReconciliationService.report(bank_account=ba, as_of=as_of)
+        return Response(report.to_dict())
 
     @action(detail=True, methods=["get"])
     def transactions(self, request, pk=None):
@@ -248,3 +350,68 @@ class BankTransactionViewSet(GenericViewSet):
         except BankingError as e:
             return _err(e)
         return Response(BankTransactionSerializer(txn).data)
+
+
+# ── ML categoriser training ────────────────────────────────────────────
+
+class MLBankCategorizerTrainView(APIView):
+    """POST /beakon/ml/bank-categorizer/train/
+
+    Body: ``{"entity_code": "THOMAS-HOLD"}`` or ``{"all": true}`` to train
+    every active entity in the org. Returns one TrainResult per entity so
+    the UI can show "X samples, 91% CV accuracy, model written to ...".
+    """
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    parser_classes = [JSONParser]
+
+    def post(self, request):
+        org = request.organization
+        entity_code = request.data.get("entity_code")
+        train_all = bool(request.data.get("all"))
+        if not entity_code and not train_all:
+            return Response(
+                {"detail": "Pass either entity_code or all=true."},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+        qs = _Entity.objects.filter(organization=org)
+        if entity_code:
+            qs = qs.filter(code=entity_code)
+        else:
+            qs = qs.filter(is_active=True)
+        results = []
+        for ent in qs:
+            r = MLBankCategorizer.train(ent)
+            results.append(r.as_dict())
+        if not results:
+            return Response(
+                {"detail": "No matching entity."},
+                status=http.HTTP_404_NOT_FOUND,
+            )
+        return Response({"results": results})
+
+
+class MLBankCategorizerStatusView(APIView):
+    """GET /beakon/ml/bank-categorizer/status/
+
+    Returns ``{results: [{entity_code, has_model, samples_available}]}``
+    for every active entity in the org. Drives a UI panel that shows
+    which entities are model-backed and which still need data."""
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+
+    def get(self, request):
+        from beakon_banking.services.ml_categorizer import (
+            _collect_training_data, MIN_TRAIN_SAMPLES,
+        )
+        org = request.organization
+        out = []
+        for ent in _Entity.objects.filter(organization=org, is_active=True).order_by("code"):
+            X, y = _collect_training_data(ent)
+            out.append({
+                "entity_code": ent.code,
+                "entity_name": ent.name,
+                "has_model": MLBankCategorizer.is_available(ent),
+                "samples_available": len(X),
+                "classes_available": len(set(y)),
+                "min_samples_to_train": MIN_TRAIN_SAMPLES,
+            })
+        return Response({"results": out})

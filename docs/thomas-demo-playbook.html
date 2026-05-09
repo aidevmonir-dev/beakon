@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Beakon — Thomas Demo Playbook</title>
+<style>
+        :root { color-scheme: light; }
+        * { box-sizing: border-box; }
+        body { font: 13px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+               color: #1f2937; background: #fff; max-width: 1080px;
+               margin: 28px auto; padding: 0 24px; }
+        h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
+        h2 { font-size: 20px; margin: 32px 0 12px;
+             padding-bottom: 6px; border-bottom: 2px solid #0f172a;
+             color: #0f172a; }
+        h3 { font-size: 15px; margin: 22px 0 6px; color: #1d4ed8; }
+        h4 { font-size: 13px; margin: 16px 0 4px; color: #334155;
+             text-transform: uppercase; letter-spacing: 0.04em; }
+        p  { margin: 6px 0; }
+        ul { margin: 4px 0; padding-left: 22px; }
+        li { margin: 2px 0; }
+        blockquote { margin: 8px 0; padding: 8px 14px;
+                     background: #f0f9ff; border-left: 3px solid #0ea5e9;
+                     color: #0c4a6e; font-style: italic; font-size: 12.5px; }
+        code { font: 12px ui-monospace, "SF Mono", "Cascadia Code", monospace;
+               background: #f1f5f9; padding: 1px 6px; border-radius: 4px;
+               color: #0f172a; }
+        pre { background: #0f172a; color: #f8fafc; padding: 12px 16px;
+              border-radius: 6px; overflow-x: auto; font-size: 12px;
+              line-height: 1.45; }
+        pre code { background: transparent; padding: 0; color: inherit; }
+        h3 code { background: transparent; padding: 0; color: #1d4ed8;
+                  font-weight: 600; }
+        table { border-collapse: collapse; width: 100%; margin: 8px 0 18px;
+                font-size: 12.5px; }
+        th, td { border: 1px solid #e5e7eb; padding: 6px 9px; text-align: left;
+                 vertical-align: top; }
+        th { background: #f8fafc; font-weight: 600; color: #334155;
+             font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+        td code { font-size: 11.5px; }
+        hr { border: 0; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+        em { color: #6366f1; font-style: italic; }
+        strong { color: #0f172a; }
+
+        @media print {
+          body { margin: 0; padding: 12mm 14mm; max-width: none; }
+          h2 { break-before: auto; break-after: avoid; }
+          h3, h4 { break-after: avoid; }
+          table, pre, blockquote { break-inside: avoid; }
+          tr { break-inside: avoid; }
+          a { color: inherit; text-decoration: none; }
+        }
+    </style>
+</head>
+<body>
+<h1>Beakon Engine — Live Demo Playbook for Thomas Allina</h1>
+<p>A 35-minute walkthrough that maps <strong>1:1 to your developer-instructions doc</strong> (<code>Accounting_Engine_Developer_Instructions.docx</code>). Each step proves a specific requirement.</p>
+<hr>
+<h2>Pre-meeting (2 min)</h2>
+<pre><code class="lang-bash">python manage.py seed_engine_demo --reset</code></pre>
+<p>Loads the demo entity, accounts, vendor, customer, tax code, FX rates. Gives you a clean stage so the engine isn't empty when Thomas arrives.</p>
+<p>Open these tabs ready:</p>
+<p>1. <code>/dashboard/blueprint/implementation</code> 2. <code>/dashboard/workflow</code> 3. <code>/dashboard/journal-entries</code> 4. <code>/dashboard/bills</code> 5. <code>/dashboard/invoices</code> 6. <code>/dashboard/approvals</code> 7. <code>/dashboard/reports</code></p>
+<hr>
+<h2>Phase 0 — Foundation (3 min)</h2>
+<blockquote>Goal: prove section 7 of the doc ("Technical modules required immediately") is delivered.</blockquote>
+<table>
+  <thead><tr><th>Step</th><th>Page</th><th>What to say</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td><code>/dashboard/blueprint/implementation</code></td><td>"Every workbook tab is a database table — 17 tabs, 1,597 rows of your data loaded."</td></tr>
+    <tr><td>2</td><td><code>/dashboard/workflow</code></td><td>"This is exactly the flow in section 3 of your doc — User enters → System suggests DR/CR → Bookkeeper approves → Posted to ledger."</td></tr>
+    <tr><td>3</td><td><code>/dashboard/blueprint/data/accounts</code></td><td>"Chart of Accounts module — 349 accounts, all with code/name/type/active/parent/currency/tax mapping per section 7.1."</td></tr>
+  </tbody></table>
+<p>His doc says: *"The first milestone is not a beautiful interface. The first milestone is a working accounting engine."* — Phase 0 establishes the engine exists.</p>
+<hr>
+<h2>Phase 1 — His "First Test: 5 transactions" (10 min)</h2>
+<p>This is <strong>Table 11</strong> in his doc, verbatim. Do them in order. After all 5, open <code>/dashboard/reports</code> to show the TB balances.</p>
+<h3>Transaction 1 — Customer invoice  →  DR AR / CR Sales</h3>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Page</td><td><code>/dashboard/invoices</code> → New Invoice</td></tr>
+    <tr><td>Inputs</td><td>customer = <code>DEMO-CUSTOMER</code>, line: revenue = <code>4000 Service Revenue</code>, amount = 1500</td></tr>
+    <tr><td>Action</td><td>Submit, then approve as the second user</td></tr>
+    <tr><td>Point at</td><td>Auto-posted JE: <code>DR 1200 AR 1500 / CR 4000 Sales 1500</code></td></tr>
+  </tbody></table>
+<h3>Transaction 2 — Supplier invoice  →  DR Expense / CR AP</h3>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Page</td><td><code>/dashboard/bills</code> → New Bill</td></tr>
+    <tr><td>Inputs</td><td>vendor = <code>DEMO-VENDOR</code>, line: expense = <code>6000 Operating Expenses</code>, amount = 1000</td></tr>
+    <tr><td>Action</td><td>Submit, approve</td></tr>
+    <tr><td>Point at</td><td><code>DR 6000 1000 / CR 2010 AP 1000</code></td></tr>
+  </tbody></table>
+<h3>Transaction 3 — Customer receipt  →  DR Bank / CR AR</h3>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Page</td><td>The invoice you just issued in Tx 1 → "Mark paid"</td></tr>
+    <tr><td>Inputs</td><td>bank = <code>1010 Operating Bank</code>, payment date = today</td></tr>
+    <tr><td>Point at</td><td><code>DR 1010 Bank 1500 / CR 1200 AR 1500</code> — invoice status flips to PAID</td></tr>
+  </tbody></table>
+<h3>Transaction 4 — Supplier payment  →  DR AP / CR Bank</h3>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Page</td><td>The bill from Tx 2 → "Mark paid"</td></tr>
+    <tr><td>Inputs</td><td>bank = <code>1010</code></td></tr>
+    <tr><td>Point at</td><td><code>DR 2010 AP 1000 / CR 1010 Bank 1000</code> — bill status PAID</td></tr>
+  </tbody></table>
+<h3>Transaction 5 — Bank charge  →  DR Bank Charges / CR Bank</h3>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Page</td><td><code>/dashboard/journal-entries</code> → New JE (manual)</td></tr>
+    <tr><td>Inputs</td><td>line 1 DR <code>6000</code> 25, line 2 CR <code>1010</code> 25, memo "Wire fee"</td></tr>
+    <tr><td>Bonus</td><td>Try entering 25/30 first — engine refuses for unbalanced. Fix to 25/25.</td></tr>
+  </tbody></table>
+<p><strong>After the 5:</strong></p>
+<ul><li><code>/dashboard/reports</code> → Trial Balance: every account ties.</li><li><code>/dashboard/audit</code> → 5 entries, each with submitter + approver + timestamp.</li><li>*"Doc section 6: success = each transaction creates correct DR/CR, bookkeeper approves, ledger balances. Done."*</li></ul>
+<hr>
+<h2>Phase 2 — His "Second test: 10 transactions" (10 min)</h2>
+<p><strong>Table 12</strong> — adds VAT, partial payments, capital, immediate expense.</p>
+<h3>Transaction 6 — Expense paid immediately</h3>
+<p>Manual JE: <code>DR 6000 50 / CR 1010 50</code>. *"No bill — petty-cash style entry."*</p>
+<h3>Transaction 7 — Sales invoice WITH VAT  →  3 lines</h3>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Page</td><td><code>/dashboard/invoices</code> → New Invoice</td></tr>
+    <tr><td>Inputs</td><td>customer = <code>DEMO-CUSTOMER</code>, line: revenue = <code>4000</code>, <strong>tax code = <code>CH-VAT-STD</code></strong>, amount = 2000</td></tr>
+    <tr><td>Form preview</td><td>tax 162 / total 2162 (auto-computed)</td></tr>
+    <tr><td>Posted JE has 3 lines</td><td><code>DR 1200 AR 2162 / CR 4000 Sales 2000 / CR 2200 Output VAT 162</code></td></tr>
+  </tbody></table>
+<p>*"Doc Table 12 row 7 says exactly this — DR AR / CR Sales + VAT Payable. The engine routed VAT automatically."*</p>
+<h3>Transaction 8 — Supplier invoice WITH VAT  →  3 lines</h3>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Page</td><td><code>/dashboard/bills</code> → New Bill</td></tr>
+    <tr><td>Inputs</td><td>vendor, line: expense = <code>6000</code>, <strong>tax code = <code>CH-VAT-STD</code></strong>, amount = 500</td></tr>
+    <tr><td>Posted JE has 3 lines</td><td><code>DR 6000 500 / DR 1210 Input VAT 40.50 / CR 2010 AP 540.50</code></td></tr>
+  </tbody></table>
+<h3>Transaction 9 — Owner capital injection  →  DR Bank / CR Capital</h3>
+<p>Manual JE: <code>DR 1010 Bank 10000 / CR 3000 Capital 10000</code>. Memo: "Founder injection".</p>
+<h3>Transaction 10 — Partial customer receipt</h3>
+<p>Use a <strong>manual JE</strong> for partial settlement: <code>DR 1010 Bank 800 / CR 1200 AR 800</code> referencing the invoice number in the memo.</p>
+<blockquote>"Partial-payment workflow on the invoice itself is the next AR build — the engine *can* post it, the UI affordance is the missing piece."</blockquote>
+<p><strong>After the 10:</strong></p>
+<ul><li><code>/dashboard/reports/vat</code> → period summary shows Output VAT − Input VAT = Net payable.</li><li><code>/dashboard/reports</code> → P&L: revenue, expenses, net income.</li><li>*"Doc says success = handles tax, partial payment, multi-line. Done."*</li></ul>
+<hr>
+<h2>Phase 3 — His "Third test: 15 transactions" (10 min)</h2>
+<p><strong>Table 13</strong> — multi-line + adjustments + edge cases.</p>
+<h3>Transaction 11 — Multi-line supplier invoice</h3>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Page</td><td><code>/dashboard/bills</code> → New Bill</td></tr>
+    <tr><td>Inputs</td><td>vendor, <strong>two lines</strong>: line 1 <code>6000 Op Expenses</code> 300, line 2 <code>6100 Insurance Expense</code> 200</td></tr>
+    <tr><td>Posted JE</td><td>One AP credit (500), two expense debits — engine still balances</td></tr>
+  </tbody></table>
+<h3>Transaction 12 — Multi-line customer invoice</h3>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Page</td><td><code>/dashboard/invoices</code></td></tr>
+    <tr><td>Inputs</td><td>customer, <strong>two lines</strong>: line 1 <code>4000</code> 1000 (consulting), line 2 <code>4000</code> 500 (training)</td></tr>
+    <tr><td>Posted JE</td><td>Two revenue credits, one AR debit</td></tr>
+  </tbody></table>
+<h3>Transaction 13 — Refund to customer</h3>
+<p>Manual JE: <code>DR 4000 Sales Revenue 200 / CR 1010 Bank 200</code>. Memo: "Refund INV-XXX".</p>
+<h3>Transaction 14 — Supplier credit note</h3>
+<p>Manual JE: <code>DR 2010 AP 100 / CR 6000 Op Expenses 100</code>. Reduces both AP and expense.</p>
+<h3>Transaction 15 — Manual journal adjustment</h3>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Page</td><td><code>/dashboard/journal-entries</code> → New JE</td></tr>
+    <tr><td>Inputs</td><td>Bookkeeper picks any DR/CR pair manually</td></tr>
+    <tr><td><strong>Show the engine refusing</strong></td><td>Enter unbalanced 10/15 → submit → engine rejects. Fix it.</td></tr>
+  </tbody></table>
+<p><strong>After all 15:</strong></p>
+<ul><li>Trial Balance still balances.</li><li>15 ApprovalActions in <code>/dashboard/audit</code>.</li><li>*"Doc says success = 15 transactions stay balanced and auditable. Done."*</li></ul>
+<hr>
+<h2>Phase 4 — Prove the controls (5 min)</h2>
+<p>His section 4 lists 8 validation rules. Show them being enforced <strong>live</strong>.</p>
+<table>
+  <thead><tr><th>Rule from his doc</th><th>How to demonstrate</th></tr></thead>
+  <tbody>
+    <tr><td>Total debit must equal total credit</td><td>Submit unbalanced JE → engine refuses (already shown in Tx 15)</td></tr>
+    <tr><td>Account must exist in CoA</td><td>FK enforces — show in admin</td></tr>
+    <tr><td>Inactive accounts cannot be used</td><td>Mark an account inactive in admin, try to post → engine blocks</td></tr>
+    <tr><td>Approved entries cannot be edited directly</td><td>Open a posted JE → Edit button is gone</td></tr>
+    <tr><td>Corrections via reversal</td><td>Click "Reverse" on a posted JE → mirror JE auto-generated</td></tr>
+    <tr><td>Audit trail on every action</td><td><code>/dashboard/audit</code> — rejection reasons captured verbatim</td></tr>
+    <tr><td>Submitter ≠ Approver (4-eyes)</td><td>Try to approve a JE as the submitter → engine blocks</td></tr>
+    <tr><td>Reports exclude unapproved</td><td>DRAFT JE doesn't appear on TB</td></tr>
+  </tbody></table>
+<p><strong>Bonus reveal — workbook Tab 09 rules are enforced live (311 of them):</strong></p>
+<ul><li>Open any account requiring a dim (e.g. <code>130100</code> requires INST). Create a JE without INST → engine refuses, citing rule <code>ACCT_130100</code>.</li><li>*"Your workbook tab 09 rules — 311 of them — running as code at every submission."*</li></ul>
+<hr>
+<h2>Closing line for Thomas</h2>
+<blockquote>*"Every requirement in your developer instructions doc is covered. Section 9 — definition of done — checks all 10 boxes:*</blockquote>
+<p>></p>
+<blockquote>*✓ user enters · ✓ system suggests DR/CR · ✓ correct CoA · ✓ bookkeeper approves · ✓ posted to ledger · ✓ DR = CR enforced · ✓ full audit trail · ✓ first 5 pass · ✓ 10 pass · ✓ 15 pass · ✓ reports read from approved data."*</blockquote>
+<hr>
+<h2>One-page cheat sheet</h2>
+<pre><code class="lang-text">PHASE 0  /dashboard/blueprint/implementation  → 17 tabs, 1,597 rows
+PHASE 1  Tx1  /dashboard/invoices             → DR AR / CR Sales
+         Tx2  /dashboard/bills                → DR Exp / CR AP
+         Tx3  Invoice → mark paid             → DR Bank / CR AR
+         Tx4  Bill    → mark paid             → DR AP / CR Bank
+         Tx5  /dashboard/journal-entries      → DR Bank Charges / CR Bank
+PHASE 2  Tx6  Manual JE (immediate exp)
+         Tx7  Invoice + VAT  → 3 lines        → DR AR / CR Sales + VAT Payable
+         Tx8  Bill   + VAT   → 3 lines        → DR Exp + VAT Recv / CR AP
+         Tx9  Manual JE (capital)
+         Tx10 Manual JE (partial AR receipt)
+PHASE 3  Tx11 Bill multi-line                 → 2 expenses, 1 AP
+         Tx12 Invoice multi-line              → 2 revenues, 1 AR
+         Tx13 Refund (manual JE)
+         Tx14 Credit note (manual JE)
+         Tx15 Manual adjustment + show DR≠CR refused
+PHASE 4  Inactive-account guard · Period-lock guard ·
+         Dim-rule (Tab 09) guard · 4-eyes guard ·
+         Audit log · Draft excluded from TB · Reverse a posted JE
+CLOSING  /dashboard/reports → TB · P&amp;L · BS all live
+         /dashboard/reports/vat → Output − Input = Net</code></pre>
+<p><strong>Total: 35 minutes.</strong> If Thomas wants to stop after Phase 1, you've already covered his "First test: 5 transactions". Phase 4 is where the *engine character* shows — it refuses bad data, which is the whole point of his doc.</p>
+<hr>
+<p>Generated for Thomas Allina demo.</p>
+</body>
+</html>

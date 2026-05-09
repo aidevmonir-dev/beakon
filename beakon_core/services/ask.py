@@ -291,7 +291,11 @@ def _stream_answer(
     history: list[dict],
     user=None,
 ) -> Iterator[dict]:
-    """Stream tokens from Ollama for a chat-style answer.
+    """Stream tokens for a chat-style answer.
+
+    Dispatches to the configured backend (``ASK_BACKEND`` setting):
+        "ollama" → local Ollama (privacy-first default)
+        "claude" → Anthropic API (faster, smarter; chat leaves machine)
 
     Yields:
         {"type": "context_built", "ctx_chars": int}
@@ -300,21 +304,44 @@ def _stream_answer(
         {"type": "error", "message": str}
     """
     context = build_financial_context(organization, entity)
-    yield {"type": "context_built", "ctx_chars": len(context)}
+    backend = (getattr(settings, "ASK_BACKEND", "ollama") or "ollama").lower()
+    if backend == "claude":
+        model = getattr(settings, "CLAUDE_ASK_MODEL", "claude-haiku-4-5")
+    else:
+        model = getattr(settings, "OLLAMA_CHAT_MODEL", "")
+    yield {
+        "type": "context_built",
+        "ctx_chars": len(context),
+        "backend": backend,
+        "model": model,
+    }
 
     user_block = _build_user_block(user, organization)
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         user_block=user_block, context=context,
     )
 
-    messages: list[dict] = [{"role": "system", "content": system_prompt}]
     # Trim history to last N turns (each turn = user + assistant pair = 2 items)
     trimmed = (history or [])[-(MAX_HISTORY_TURNS * 2):]
+    chat_history: list[dict] = []
     for h in trimmed:
         role = h.get("role")
         content = (h.get("content") or "").strip()
         if role in ("user", "assistant") and content:
-            messages.append({"role": role, "content": content})
+            chat_history.append({"role": role, "content": content})
+
+    if backend == "claude":
+        yield from _stream_claude(system_prompt, chat_history, question)
+    else:
+        yield from _stream_ollama(system_prompt, chat_history, question)
+
+
+def _stream_ollama(
+    system_prompt: str, chat_history: list[dict], question: str,
+) -> Iterator[dict]:
+    """Local-Ollama path. Streams via /api/chat with `stream=True`."""
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    messages.extend(chat_history)
     messages.append({"role": "user", "content": question})
 
     url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/chat"
@@ -367,5 +394,69 @@ def _stream_answer(
                 break
     finally:
         resp.close()
+
+    yield {"type": "done", "full": full}
+
+
+def _stream_claude(
+    system_prompt: str, chat_history: list[dict], question: str,
+) -> Iterator[dict]:
+    """Anthropic path. Uses messages.stream() so token-deltas arrive
+    in the same shape as the Ollama path (UI doesn't have to know).
+    """
+    try:
+        import anthropic
+    except ImportError:
+        yield {"type": "error",
+               "message": "anthropic SDK is not installed; "
+                          "set ASK_BACKEND=ollama or pip install anthropic."}
+        return
+    api_key = settings.ANTHROPIC_API_KEY or None
+    if not api_key:
+        yield {"type": "error",
+               "message": "ANTHROPIC_API_KEY is not configured "
+                          "(needed when ASK_BACKEND=claude)."}
+        return
+
+    # Anthropic takes `system` separately and message roles only ever
+    # alternate user/assistant — we already filtered the history to those
+    # two roles, so it's safe to forward verbatim.
+    messages = list(chat_history) + [{"role": "user", "content": question}]
+    model = getattr(settings, "CLAUDE_ASK_MODEL", "claude-haiku-4-5")
+
+    from .anthropic_throttle import claude_throttle
+
+    client = anthropic.Anthropic(api_key=api_key)
+    claude_throttle()
+    full = ""
+    try:
+        with client.messages.stream(
+            model=model,
+            max_tokens=1024,
+            system=system_prompt,
+            messages=messages,
+        ) as stream:
+            for delta in stream.text_stream:
+                if not delta:
+                    continue
+                full += delta
+                yield {"type": "token", "text": delta}
+    except anthropic.AuthenticationError:
+        yield {"type": "error",
+               "message": "ANTHROPIC_API_KEY is invalid or revoked."}
+        return
+    except anthropic.RateLimitError as e:
+        try:
+            retry_after = int(e.response.headers.get("retry-after", "0")) or None
+        except (AttributeError, ValueError, TypeError):
+            retry_after = None
+        wait_msg = (f"Try again in ~{retry_after}s."
+                    if retry_after else "Try again shortly.")
+        yield {"type": "error",
+               "message": f"Claude rate limit reached (5/min per org). {wait_msg}"}
+        return
+    except anthropic.APIError as e:
+        yield {"type": "error", "message": f"Claude API error: {e}"}
+        return
 
     yield {"type": "done", "full": full}

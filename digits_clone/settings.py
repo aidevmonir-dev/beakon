@@ -174,6 +174,28 @@ OLLAMA_TIMEOUT_SECONDS = int(_cfg("OLLAMA_TIMEOUT_SECONDS", default="180"))
 OLLAMA_CHAT_TIMEOUT_SECONDS = int(_cfg("OLLAMA_CHAT_TIMEOUT_SECONDS", default="300"))
 
 # ---------------------------------------------------------------------------
+# OCR backend selector
+#   "ollama"  → local Ollama (default, privacy-first, see block above)
+#   "claude"  → Anthropic Claude API (higher accuracy, native PDF + scanned PDF
+#               support, requires ANTHROPIC_API_KEY; bills leave the machine).
+# ---------------------------------------------------------------------------
+OCR_BACKEND = _cfg("OCR_BACKEND", default="ollama").lower()
+ANTHROPIC_API_KEY = _cfg("ANTHROPIC_API_KEY", default="")
+# Skill default is Opus 4.7. Family-office bill volumes are low and accuracy
+# matters more than per-bill cost; override to claude-sonnet-4-6 for cheaper
+# extraction at slightly lower quality.
+CLAUDE_OCR_MODEL = _cfg("CLAUDE_OCR_MODEL", default="claude-opus-4-7")
+
+# ---------------------------------------------------------------------------
+# Ask Beakon backend
+#   "ollama" → local Ollama (default, privacy-first)
+#   "claude" → Anthropic API (faster, smarter answers; chat leaves the machine)
+# Defaults to OCR_BACKEND so a single env-var flip enables Claude everywhere.
+# ---------------------------------------------------------------------------
+ASK_BACKEND = _cfg("ASK_BACKEND", default=OCR_BACKEND).lower()
+CLAUDE_ASK_MODEL = _cfg("CLAUDE_ASK_MODEL", default="claude-haiku-4-5")
+
+# ---------------------------------------------------------------------------
 # Django REST Framework
 # ---------------------------------------------------------------------------
 REST_FRAMEWORK = {

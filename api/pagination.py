@@ -5,7 +5,11 @@ from rest_framework.response import Response
 class StandardPagination(PageNumberPagination):
     page_size = 25
     page_size_query_param = "page_size"
-    max_page_size = 100
+    # Workbook-scale lists (CoA = 349 accounts, mappings = 311, validation
+    # rules = 311, controlled lists = 206) all need to fit in one page when
+    # the frontend asks for the whole set. 1000 is plenty headroom and still
+    # caps abuse.
+    max_page_size = 1000
 
     def get_paginated_response(self, data):
         return Response({

@@ -187,7 +187,7 @@ export default function IntercompanyPage() {
                             <td className="py-1 pr-4 font-mono text-gray-700">{m.entity_code}</td>
                             <td className="py-1 pr-4 text-gray-500 whitespace-nowrap">{fmtDate(m.date)}</td>
                             <td className="py-1 pl-4 text-right font-mono text-gray-700 tabular-nums whitespace-nowrap">
-                              {fmt2(m.total)} <span className="text-gray-400">{m.currency}</span>
+                              <span className="text-gray-400">{m.currency}</span> {fmt2(m.total)}
                             </td>
                             <td className="py-1 pl-4">
                               <span className={statusBadge(m.status)}>{fmtLabel(m.status)}</span>

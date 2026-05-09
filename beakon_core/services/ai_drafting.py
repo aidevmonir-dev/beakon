@@ -152,6 +152,31 @@ class AIBillDraftingService:
                 f"({extracted['confidence_in_account']:.2f}) — please verify."
             )
 
+        # ── Multi-period revenue-recognition flag ──────────────────────
+        # Per Thomas's WhatsApp (2026-04-25, $1,000 Nov–Apr example):
+        # when the AI extracts a service period that spans more than one
+        # accounting period, surface a clear warning to the reviewer so
+        # they can apply the right deferral / accrual treatment. We don't
+        # auto-split yet — that requires the rules registry Thomas wants
+        # to design with us. For now: detect, flag, let the human decide.
+        sp_start = _parse_date(extracted.get("service_period_start"))
+        sp_end = _parse_date(extracted.get("service_period_end"))
+        if sp_start and sp_end and sp_end >= sp_start:
+            # Distinct calendar months covered, inclusive on both ends.
+            months = (sp_end.year - sp_start.year) * 12 + (sp_end.month - sp_start.month) + 1
+            if months > 1:
+                std_label = c.ACCOUNTING_STANDARD_SHORT.get(
+                    entity.accounting_standard or c.ACCT_STD_IFRS, "IFRS",
+                )
+                warnings.append(
+                    f"Service period {sp_start.isoformat()} to {sp_end.isoformat()} "
+                    f"spans {months} months. Under {std_label} this typically requires "
+                    f"period allocation: recognise the portion that falls in the current "
+                    f"period as expense, defer the rest to a prepaid asset and amortise "
+                    f"over the remaining months. AI proposed a single-period booking — "
+                    f"reviewer to apply the deferral before posting."
+                )
+
         # ── 4. Build the JE ─────────────────────────────────────────────
         memo = (
             f"{memo_prefix}"
@@ -246,6 +271,8 @@ class AIBillDraftingService:
                 "suggested_account_reasoning": extracted.get("suggested_account_reasoning"),
                 "accounting_standard_reasoning": extracted.get("accounting_standard_reasoning"),
                 "entity_accounting_standard": entity.accounting_standard,
+                "service_period_start": extracted.get("service_period_start"),
+                "service_period_end": extracted.get("service_period_end"),
                 "warnings": warnings,
             },
         )

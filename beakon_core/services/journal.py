@@ -112,6 +112,15 @@ class _Validator:
                 details={"period": period.name},
             ))
 
+    def dimension_rules(self):
+        """Enforce workbook DimensionValidationRule rows.
+
+        Lazily imported to avoid circular dependency on the services module.
+        """
+        from beakon_core.services.dimension_rules import DimensionRuleService
+        for violation in DimensionRuleService.violations_for_entry(self.entry):
+            self.errors.append(violation.as_error())
+
     def run_all(self):
         self.errors = []
         self.min_lines()
@@ -119,6 +128,7 @@ class _Validator:
         self.accounts_belong_to_entity()
         self.balance()
         self.period_allows_posting()
+        self.dimension_rules()
         return self.errors
 
 
@@ -151,7 +161,7 @@ class JournalService:
     @transaction.atomic
     def create_draft(
         *, organization, entity, date, lines,
-        user=None, memo="", reference="",
+        user=None, memo="", explanation="", reference="",
         source_type=c.SOURCE_MANUAL, source_id=None, source_ref="",
         currency=None, intercompany_group=None, counterparty_entity=None,
     ):
@@ -171,6 +181,7 @@ class JournalService:
             entry_number=EntityService.next_entry_number(entity),
             date=date,
             memo=memo,
+            explanation=explanation,
             reference=reference,
             status=c.JE_DRAFT,
             source_type=source_type,
@@ -232,16 +243,30 @@ class JournalService:
         _require_transition(entry.status, c.JE_APPROVED)
         # Blueprint: "AI may draft … humans control". Block self-approval
         # when submitter or creator is the same user.
+        #
+        # Platform-superuser override: Django ``is_superuser`` users are
+        # platform staff (Beakon engineering / support), not tenant org
+        # members. Their override is allowed for support and emergency
+        # break-glass actions, but every bypass is tagged in the audit
+        # log note so it's permanently traceable. Tenant-side roles
+        # (Owner, Admin, Accountant) DO NOT bypass — only Django
+        # ``is_superuser=True``.
+        is_superuser = bool(user and getattr(user, "is_superuser", False))
         if user and entry.submitted_for_approval_by_id == user.id:
-            raise SelfApproval(
-                "The submitter cannot approve their own entry",
-                code=c.ERR_SELF_APPROVAL,
-            )
+            if not is_superuser:
+                raise SelfApproval(
+                    "The submitter cannot approve their own entry",
+                    code=c.ERR_SELF_APPROVAL,
+                )
+            note = (note + " " if note else "") + "[SoD bypassed: superuser override]"
         if user and entry.created_by_id == user.id and not entry.submitted_for_approval_by_id:
-            raise SelfApproval(
-                "The creator cannot approve their own entry",
-                code=c.ERR_SELF_APPROVAL,
-            )
+            if not is_superuser:
+                raise SelfApproval(
+                    "The creator cannot approve their own entry",
+                    code=c.ERR_SELF_APPROVAL,
+                )
+            if "[SoD bypassed:" not in note:
+                note = (note + " " if note else "") + "[SoD bypassed: superuser override]"
         # Re-validate in case something changed between submit and approve.
         errors = _Validator(entry).run_all()
         if errors:
@@ -294,6 +319,22 @@ class JournalService:
         errors = _Validator(entry).run_all()
         if errors:
             raise errors[0]
+        # 4-eyes guard at posting: when the entity opts in, the user posting
+        # must be different from the approver. (Self-approval at the approve
+        # step is already blocked unconditionally — except for platform
+        # superusers, see ``approve`` above.)
+        if (
+            user
+            and getattr(entry.entity, "four_eyes_posting_required", False)
+            and entry.approved_by_id == user.id
+        ):
+            if not getattr(user, "is_superuser", False):
+                raise SelfApproval(
+                    "4-eyes posting is required for this entity: the user posting "
+                    "must be different from the user who approved.",
+                    code=c.ERR_SELF_APPROVAL,
+                )
+            note = (note + " " if note else "") + "[4-eyes bypassed: superuser override]"
         if entry.intercompany_group_id:
             JournalService.assert_intercompany_balanced(entry.intercompany_group)
         prev, entry.status = entry.status, c.JE_POSTED
@@ -478,6 +519,17 @@ def _create_line(entry, line_data, default_currency, idx):
         functional_debit=functional_debit,
         functional_credit=functional_credit,
         counterparty_entity_id=line_data.get("counterparty_entity_id"),
+        # FK-backed dimensions (workbook tab-2 masters)
+        dimension_counterparty_id=line_data.get("dimension_counterparty_id"),
+        dimension_loan_id=line_data.get("dimension_loan_id"),
+        dimension_related_party_id=line_data.get("dimension_related_party_id"),
+        dimension_property_id=line_data.get("dimension_property_id"),
+        dimension_policy_id=line_data.get("dimension_policy_id"),
+        dimension_pension_id=line_data.get("dimension_pension_id"),
+        dimension_tax_lot_id=line_data.get("dimension_tax_lot_id"),
+        dimension_family_member_id=line_data.get("dimension_family_member_id"),
+        dimension_commitment_id=line_data.get("dimension_commitment_id"),
+        # Code-based dimensions (workbook tier-1 + controlled lists)
         dimension_bank_code=(line_data.get("dimension_bank_code") or "").strip(),
         dimension_custodian_code=(line_data.get("dimension_custodian_code") or "").strip(),
         dimension_portfolio_code=(line_data.get("dimension_portfolio_code") or "").strip(),
@@ -485,6 +537,12 @@ def _create_line(entry, line_data, default_currency, idx):
         dimension_strategy_code=(line_data.get("dimension_strategy_code") or "").strip(),
         dimension_asset_class_code=(line_data.get("dimension_asset_class_code") or "").strip(),
         dimension_maturity_code=(line_data.get("dimension_maturity_code") or "").strip(),
+        dimension_commitment_code=(line_data.get("dimension_commitment_code") or "").strip(),
+        dimension_transfer_type_code=(line_data.get("dimension_transfer_type_code") or "").strip(),
+        dimension_jurisdiction_code=(line_data.get("dimension_jurisdiction_code") or "").strip(),
+        dimension_wallet_code=(line_data.get("dimension_wallet_code") or "").strip(),
+        dimension_report_category_code=(line_data.get("dimension_report_category_code") or "").strip(),
+        dimension_restriction_type_code=(line_data.get("dimension_restriction_type_code") or "").strip(),
         line_order=line_data.get("line_order", idx),
     )
 

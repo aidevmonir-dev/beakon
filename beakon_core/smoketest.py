@@ -29,6 +29,8 @@ django.setup()
 
 from django.contrib.auth import get_user_model  # noqa: E402
 from django.db import transaction  # noqa: E402
+from django.db.models import Q, Sum  # noqa: E402
+from dateutil.relativedelta import relativedelta  # noqa: E402
 
 from beakon_core import constants as bc  # noqa: E402
 from beakon_core.exceptions import (  # noqa: E402
@@ -42,6 +44,7 @@ from beakon_core.models import (  # noqa: E402
     Account,
     ApprovalAction,
     Bill,
+    Commitment,
     Currency,
     Customer,
     Entity,
@@ -49,16 +52,36 @@ from beakon_core.models import (  # noqa: E402
     IntercompanyGroup,
     Invoice,
     JournalEntry,
+    JournalLine,
+    Loan,
     Period,
+    Policy,
+    Property,
     Vendor,
 )
 from beakon_core.services import (  # noqa: E402
+    BankChargeService,
+    BankInterestService,
+    BankTransferService,
     BillService,
+    ClosingEntriesService,
+    CommitmentService,
+    CustomerCreditNoteService,
+    DisbursementService,
     FXRevaluationService,
+    InsuranceService,
     InvoiceService,
     JournalService,
+    LoanService,
+    OwnerContributionService,
+    PostingRuleService,
+    PropertyService,
+    RecognitionService,
     ReportsService,
     SourceDocumentService,
+    VATRemittanceService,
+    VATReportService,
+    VendorCreditNoteService,
 )
 from organizations.models import Organization  # noqa: E402
 
@@ -635,22 +658,26 @@ def main():
 
         # ── 16. Vendors / Customers ─────────────────────────────────
         print("-- scenario 16: vendor + customer masters + JE linkage")
-        vendor = Vendor.objects.create(
+        vendor, _ = Vendor.objects.update_or_create(
             organization=org, code="STAPLES",
-            name="Staples Business Advantage",
-            tax_id="12-3456789",
-            default_currency="USD",
-            default_payment_terms_days=30,
-            default_expense_account=A["6000"],
-            created_by=alice,
+            defaults={
+                "name": "Staples Business Advantage",
+                "tax_id": "12-3456789",
+                "default_currency": "USD",
+                "default_payment_terms_days": 30,
+                "default_expense_account": A["6000"],
+                "created_by": alice,
+            },
         )
-        customer = Customer.objects.create(
+        customer, _ = Customer.objects.update_or_create(
             organization=org, code="ACME",
-            name="Acme Industries",
-            default_currency="USD",
-            default_payment_terms_days=45,
-            credit_limit=Decimal("50000.00"),
-            created_by=alice,
+            defaults={
+                "name": "Acme Industries",
+                "default_currency": "USD",
+                "default_payment_terms_days": 45,
+                "credit_limit": Decimal("50000.00"),
+                "created_by": alice,
+            },
         )
         je_bill = JournalService.create_draft(
             organization=org, entity=holdco, date=date(2026, 4, 22),
@@ -861,6 +888,950 @@ def main():
         print(f"  verification: {cf['verification']}")
         assert cf["verification"]["matches"], cf["verification"]
         print(f"  OK CF reconciles to BS")
+
+        # ── 20. Disbursement / rebillable cost → client invoice ───────
+        print("-- scenario 20: rebillable cost recovered as a client disbursement invoice")
+        # Post a rebillable expense (DR 6000 / CR 1010) for the architecture
+        # PDF's DHL example: cost is incurred by HoldCo but actually for a client.
+        je_dhl = JournalService.create_draft(
+            organization=org, entity=holdco, date=date(2026, 4, 22),
+            currency="USD", memo="DHL shipment for Acme matter",
+            lines=[
+                {"account_id": A["6000"].id, "debit": Decimal("180.00"),
+                 "currency": "USD", "description": "DHL shipment 12345"},
+                {"account_id": A["1010"].id, "credit": Decimal("180.00"),
+                 "currency": "USD", "description": "DHL shipment 12345"},
+            ],
+            user=alice,
+        )
+        # Mark the expense line rebillable to ACME
+        from beakon_core.models import DimensionType, DimensionValue
+        client_dt, _ = DimensionType.objects.get_or_create(
+            organization=org, code="CLIENT_RB",
+            defaults={"name": "Client (rebill)", "active_flag": True},
+        )
+        client_dv, _ = DimensionValue.objects.get_or_create(
+            organization=org, dimension_type=client_dt, code="ACME",
+            defaults={"name": "ACME", "active_flag": True},
+        )
+        eline = je_dhl.lines.get(account=A["6000"])
+        eline.is_rebillable = True
+        eline.rebill_client_dimension_value = client_dv
+        eline.save(update_fields=["is_rebillable", "rebill_client_dimension_value"])
+        JournalService.submit_for_approval(je_dhl, user=alice)
+        JournalService.approve(je_dhl, user=bob)
+        JournalService.post(je_dhl, user=bob)
+        print(f"  DHL expense JE {je_dhl.entry_number} posted (DR 6000 180 / CR 1010 180)")
+
+        # Pending list includes this line
+        pending = list(DisbursementService.pending_lines(organization=org))
+        assert eline.id in {p.id for p in pending}, "rebillable line should be pending"
+        print(f"  pending rebillables: {len(pending)}")
+
+        # Issue a disbursement invoice from the rebillable
+        disb_inv = DisbursementService.create_invoice_from_rebillables(
+            organization=org, entity=holdco, customer=customer,
+            journal_line_ids=[eline.id],
+            invoice_date=date(2026, 4, 28),
+            description="DHL passthrough",
+            user=alice,
+        )
+        assert disb_inv.lines.count() == 1
+        assert disb_inv.total == Decimal("180.0000")
+        eline.refresh_from_db()
+        assert eline.rebilled_invoice_line_id == disb_inv.lines.first().id, \
+            "source line should be stamped"
+        print(f"  draft disbursement invoice {disb_inv.reference} total=180 USD "
+              f"linked back to JE-line {eline.id}")
+
+        # Pending list now excludes it
+        pending2 = list(DisbursementService.pending_lines(organization=org))
+        assert eline.id not in {p.id for p in pending2}, "should not double-list"
+        print(f"  pending after billing: {len(pending2)}")
+
+        # Double-bill is rejected
+        try:
+            DisbursementService.create_invoice_from_rebillables(
+                organization=org, entity=holdco, customer=customer,
+                journal_line_ids=[eline.id],
+                invoice_date=date(2026, 4, 28), user=alice,
+            )
+            raise AssertionError("double-bill should have raised")
+        except ValidationError as e:
+            print(f"  OK double-bill refused: {e.code}")
+
+        # Issue the disbursement invoice through normal AR flow
+        InvoiceService.submit_for_approval(disb_inv, user=alice)
+        InvoiceService.issue(disb_inv, user=bob)
+        disb_inv.refresh_from_db()
+        assert disb_inv.status == "issued"
+        assert disb_inv.issued_journal_entry_id is not None
+
+        # Net method check: 6000 should now be DR 180 (DHL) + CR 180 (recovery) = 0
+        net_6000 = (
+            JournalEntry.objects
+            .filter(organization=org, status="posted",
+                    id__in=[je_dhl.id, disb_inv.issued_journal_entry_id])
+            .aggregate(
+                d=Sum("lines__debit", filter=Q(lines__account=A["6000"])),
+                c=Sum("lines__credit", filter=Q(lines__account=A["6000"])),
+            )
+        )
+        net = (net_6000["d"] or Decimal("0")) - (net_6000["c"] or Decimal("0"))
+        assert net == Decimal("0"), f"net P&L on 6000 should be 0, got {net}"
+        print(f"  issued {disb_inv.reference} status=issued; "
+              f"net P&L on 6000 after recovery = {net} (net method OK)")
+
+        # TB still balanced
+        tb3 = ReportsService.trial_balance(entity=holdco, as_of=date(2026, 4, 30))
+        assert tb3["totals"]["is_balanced"], tb3["totals"]
+        print("  TB still balanced after disbursement cycle")
+
+        # ── 21. VAT engine — Swiss 8.1% standard rate, full round trip ──
+        print("-- scenario 21: VAT engine — Swiss 8.1% standard rate")
+        from beakon_core.models import TaxCode
+
+        # System accounts for VAT
+        vat_payable = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="2200",
+            defaults={
+                "name": "VAT payable (Swiss 8.1%)",
+                "account_type": bc.ACCOUNT_TYPE_LIABILITY,
+                "account_subtype": "vat_payable",
+                "is_system": True,
+            },
+        )[0]
+        vat_receivable = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="1210",
+            defaults={
+                "name": "Input VAT recoverable (Swiss 8.1%)",
+                "account_type": bc.ACCOUNT_TYPE_ASSET,
+                "account_subtype": "vat_receivable",
+                "is_system": True,
+            },
+        )[0]
+
+        # The TaxCode itself
+        ch_std, _ = TaxCode.objects.update_or_create(
+            organization=org, code="CH-VAT-STD",
+            defaults={
+                "name": "Swiss Standard VAT 8.1%",
+                "country_code": "CH",
+                "tax_type": "STANDARD",
+                "rate": Decimal("8.10"),
+                "output_account": vat_payable,
+                "input_account": vat_receivable,
+                "active_flag": True,
+            },
+        )
+        print(f"  TaxCode {ch_std.code} {ch_std.rate}% → output={vat_payable.code} "
+              f"input={vat_receivable.code}")
+
+        # ── (a) Bill with tax: 100 + 8.10 = 108.10 ─────────────────
+        vat_bill = BillService.create_draft(
+            organization=org, entity=holdco, vendor=vendor,
+            invoice_date=date(2026, 4, 25),
+            currency="USD",
+            lines=[{
+                "expense_account_id": A["6000"].id,
+                "description": "Consulting fee",
+                "amount": Decimal("100.00"),
+                "tax_code_id": ch_std.id,
+            }],
+            user=alice,
+        )
+        assert vat_bill.subtotal == Decimal("100.00")
+        assert vat_bill.tax_amount == Decimal("8.10")
+        assert vat_bill.total == Decimal("108.10")
+        print(f"  draft bill {vat_bill.reference}: subtotal={vat_bill.subtotal} "
+              f"tax={vat_bill.tax_amount} total={vat_bill.total}")
+        BillService.submit_for_approval(vat_bill, user=alice)
+        BillService.approve(vat_bill, user=bob)
+        vat_bill.refresh_from_db()
+        je_acc = vat_bill.accrual_journal_entry
+        # Verify: DR 6000 100 + DR 1210 8.10 + CR 2010 (AP) 108.10
+        rows = {l.account.code: (l.debit, l.credit) for l in je_acc.lines.all()}
+        assert rows["6000"] == (Decimal("100.0000"), Decimal("0")), rows
+        assert rows["1210"] == (Decimal("8.1000"), Decimal("0")), rows
+        assert rows["2010"] == (Decimal("0"), Decimal("108.1000")), rows
+        print(f"  accrual JE {je_acc.entry_number} OK: "
+              f"DR 6000 100 / DR 1210 8.10 (input VAT) / CR 2010 108.10")
+
+        # ── (b) Invoice with tax: 1000 + 81.00 = 1081.00 ──────────
+        vat_inv = InvoiceService.create_draft(
+            organization=org, entity=holdco, customer=customer,
+            invoice_date=date(2026, 4, 26),
+            currency="USD",
+            lines=[{
+                "revenue_account_id": A["4000"].id,
+                "description": "Advisory services",
+                "amount": Decimal("1000.00"),
+                "tax_code_id": ch_std.id,
+            }],
+            user=alice,
+        )
+        assert vat_inv.subtotal == Decimal("1000.00")
+        assert vat_inv.tax_amount == Decimal("81.00")
+        assert vat_inv.total == Decimal("1081.00")
+        print(f"  draft inv {vat_inv.reference}: subtotal={vat_inv.subtotal} "
+              f"tax={vat_inv.tax_amount} total={vat_inv.total}")
+        InvoiceService.submit_for_approval(vat_inv, user=alice)
+        InvoiceService.issue(vat_inv, user=bob)
+        vat_inv.refresh_from_db()
+        je_iss2 = vat_inv.issued_journal_entry
+        # Verify: DR 1200 (AR) 1081 + CR 4000 (revenue) 1000 + CR 2200 (output VAT) 81
+        rows2 = {l.account.code: (l.debit, l.credit) for l in je_iss2.lines.all()}
+        ar_code = next(c for c, _ in rows2.items() if c.startswith("1200"))
+        assert rows2[ar_code] == (Decimal("1081.0000"), Decimal("0")), rows2
+        assert rows2["4000"] == (Decimal("0"), Decimal("1000.0000")), rows2
+        assert rows2["2200"] == (Decimal("0"), Decimal("81.0000")), rows2
+        print(f"  issuance JE {je_iss2.entry_number} OK: "
+              f"DR {ar_code} 1081 / CR 4000 1000 / CR 2200 81 (output VAT)")
+
+        # ── (c) VAT report ─────────────────────────────────────────
+        report = VATReportService.report(
+            organization=org, entity=holdco,
+            date_from=date(2026, 4, 1), date_to=date(2026, 4, 30),
+        )
+        d = report.as_dict()
+        print(f"  VAT report rows={len(d['rows'])} "
+              f"output={d['total_output_vat']} input={d['total_input_vat']} "
+              f"net={d['net_vat_payable']}")
+        assert report.total_output_vat == Decimal("81.0000")
+        assert report.total_input_vat == Decimal("8.1000")
+        assert report.net_vat_payable == Decimal("72.9000")
+
+        # TB still balanced
+        tb4 = ReportsService.trial_balance(entity=holdco, as_of=date(2026, 4, 30))
+        assert tb4["totals"]["is_balanced"], tb4["totals"]
+        print("  TB still balanced after VAT cycle")
+
+        # ── 22. Period close — revenue + expense → Retained Earnings ─
+        print("-- scenario 22: period close — close revenue + expense to RE")
+        # Need a retained earnings account on holdco
+        re_account = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="3100",
+            defaults={
+                "name": "Retained Earnings",
+                "account_type": bc.ACCOUNT_TYPE_EQUITY,
+                "account_subtype": "retained_earnings",
+                "is_system": True,
+            },
+        )[0]
+
+        # Compute pre-close totals so we can verify post-close zeroing
+        pl_before = ReportsService.profit_loss(
+            entity=holdco,
+            date_from=date(2026, 4, 1), date_to=date(2026, 4, 30),
+        )
+        rev_before = pl_before["revenue"]["total"]
+        exp_before = pl_before["operating_expenses"]["total"]
+        print(f"  pre-close: revenue={rev_before} expenses={exp_before} "
+              f"net={pl_before['net_income']}")
+
+        result = ClosingEntriesService.close_period(period, user=bob)
+        print(f"  closing JE {result.journal_entry.entry_number} posted "
+              f"({result.line_count} P&L lines + RE offset)")
+        print(f"  revenue_total={result.revenue_total} "
+              f"expense_total={result.expense_total} "
+              f"net_income={result.net_income}")
+        assert result.journal_entry.status == "posted"
+        assert result.journal_entry.source_type == "period_close"
+
+        # Re-running close should be refused
+        try:
+            ClosingEntriesService.close_period(period, user=bob)
+            raise AssertionError("re-close should have raised")
+        except ValidationError as e:
+            print(f"  OK re-close refused: {e.code}")
+
+        # Verify the closing JE itself balances and posts correctly:
+        # debits + credits per side must match in functional currency.
+        agg = result.journal_entry.lines.aggregate(
+            d=Sum("functional_debit"), c=Sum("functional_credit"),
+        )
+        assert agg["d"] == agg["c"], f"closing JE not balanced: {agg}"
+        print(f"  closing JE balanced in functional ccy: {agg['d']} = {agg['c']}")
+
+        # Verify the offset to RE matches net_income
+        re_lines = result.journal_entry.lines.filter(account=re_account)
+        assert re_lines.count() == 1, f"expected 1 RE line, got {re_lines.count()}"
+        re_line = re_lines.first()
+        if result.net_income > 0:
+            assert re_line.credit == result.net_income, \
+                f"RE should be credited net_income {result.net_income}, got {re_line.credit}"
+        elif result.net_income < 0:
+            assert re_line.debit == -result.net_income, \
+                f"RE should be debited |net_loss|, got {re_line.debit}"
+        print(f"  RE offset on {re_account.code}: "
+              f"DR={re_line.debit} CR={re_line.credit} (net_income={result.net_income})")
+
+        # TB still balanced
+        tb5 = ReportsService.trial_balance(entity=holdco, as_of=date(2026, 4, 30))
+        assert tb5["totals"]["is_balanced"], tb5["totals"]
+        print("  TB still balanced after period close")
+
+        # ── 23. Recognition rule — Thomas's Nov–Apr $1,000 example ───
+        print("-- scenario 23: recognition / prepaid expense across 6 periods")
+        # Need a Prepaid Expense balance-sheet account to deferral against.
+        # Recognise into operating_expense (6000).
+        prepaid = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="1130",
+            defaults={
+                "name": "Prepaid Expenses",
+                "account_type": bc.ACCOUNT_TYPE_ASSET,
+                "account_subtype": "prepaid",
+                "is_system": False,
+            },
+        )[0]
+        # Need monthly periods Nov 2025 – Apr 2026 to host the recognition JEs.
+        for ystart in (date(2025, 11, 1), date(2025, 12, 1),
+                       date(2026, 1, 1), date(2026, 2, 1),
+                       date(2026, 3, 1)):
+            yend = (ystart + relativedelta(months=1) - relativedelta(days=1))
+            Period.objects.update_or_create(
+                entity=holdco, start_date=ystart, end_date=yend,
+                defaults={
+                    "name": ystart.strftime("%B %Y"),
+                    "period_type": bc.PERIOD_MONTH,
+                    "status": bc.PERIOD_OPEN,
+                },
+            )
+        # April 2026 already exists from earlier scenarios; leave it.
+
+        # Step 1: Park the prepayment — DR Prepaid 1000 / CR Bank 1000 on Nov 1.
+        prepay_je = JournalService.create_draft(
+            organization=org, entity=holdco, date=date(2025, 11, 1),
+            currency="USD", memo="Insurance prepayment Nov–Apr",
+            lines=[
+                {"account_id": prepaid.id, "debit": Decimal("1000.00"), "currency": "USD"},
+                {"account_id": A["1010"].id, "credit": Decimal("1000.00"), "currency": "USD"},
+            ],
+            user=alice,
+        )
+        JournalService.submit_for_approval(prepay_je, user=alice)
+        JournalService.approve(prepay_je, user=bob)
+        JournalService.post(prepay_je, user=bob)
+        print(f"  prepayment JE {prepay_je.entry_number}: DR 1130 1000 / CR 1010 1000")
+
+        # Step 2: Create the recognition rule
+        rule = RecognitionService.create_rule(
+            organization=org, entity=holdco,
+            code="PREPAID-INS-NOV2025",
+            name="Insurance amortisation Nov 2025 – Apr 2026",
+            rule_type="PREPAID_EXPENSE",
+            total_amount=Decimal("1000.00"),
+            currency="USD",
+            start_date=date(2025, 11, 1),
+            end_date=date(2026, 4, 30),
+            deferral_account=prepaid,
+            recognition_account=A["6000"],
+            user=alice,
+        )
+        sched = RecognitionService.schedule(rule)
+        print(f"  rule {rule.code} created with {len(sched)} periods:")
+        for s in sched:
+            print(f"    seq={s['sequence']:>2} {s['period_start']} → {s['period_end']} "
+                  f"amount={s['amount']}")
+        assert len(sched) == 6, f"expected 6 periods, got {len(sched)}"
+        # Total reconciles exactly (last period gets rounding remainder)
+        total = sum(Decimal(s["amount"]) for s in sched)
+        assert total == Decimal("1000.00"), f"schedule sums to {total}"
+
+        # Step 3: Recognise through Feb 2026 (4 of 6 periods due)
+        result = RecognitionService.recognize(
+            rule, as_of=date(2026, 2, 28), user=bob,
+        )
+        print(f"  ran recognition through Feb 28: posted {len(result.posted)} JEs, "
+              f"completed_now={result.completed_now}")
+        assert len(result.posted) == 4, f"expected 4 JEs, got {len(result.posted)}"
+        rule.refresh_from_db()
+        assert rule.recognized_to_date == Decimal("666.6800"), \
+            f"recognized_to_date={rule.recognized_to_date}"
+        print(f"  recognized_to_date={rule.recognized_to_date}, "
+              f"remaining={rule.remaining_amount}")
+
+        # Step 4: Idempotency — re-running through the same date posts 0 more
+        result2 = RecognitionService.recognize(
+            rule, as_of=date(2026, 2, 28), user=bob,
+        )
+        assert len(result2.posted) == 0, f"idempotency broken: posted {len(result2.posted)}"
+        assert result2.skipped_already_posted == 4
+        print(f"  re-run idempotent: posted 0, skipped {result2.skipped_already_posted}")
+
+        # Step 5: Recognise final 2 periods (Mar + Apr)
+        result3 = RecognitionService.recognize(
+            rule, as_of=date(2026, 4, 30), user=bob,
+        )
+        print(f"  ran through Apr 30: posted {len(result3.posted)} more JEs, "
+              f"completed_now={result3.completed_now}")
+        assert len(result3.posted) == 2
+        assert result3.completed_now is True
+        rule.refresh_from_db()
+        assert rule.status == "COMPLETED"
+        assert rule.recognized_to_date == Decimal("1000.00")
+
+        # Verify the prepaid account ends at 0 (Nov 1: +1000; six recognitions: -1000)
+        prepaid_balance = (
+            JournalLine.objects
+            .filter(
+                journal_entry__organization=org,
+                journal_entry__status="posted",
+                account=prepaid,
+            )
+            .aggregate(d=Sum("functional_debit"), c=Sum("functional_credit"))
+        )
+        prepaid_net = (prepaid_balance["d"] or Decimal("0")) - (prepaid_balance["c"] or Decimal("0"))
+        assert prepaid_net == Decimal("0"), f"prepaid should net to 0, got {prepaid_net}"
+        print(f"  prepaid 1130 balance after full recognition = {prepaid_net} (OK)")
+
+        # ── 24. Bank charge — 5th transaction type (Thomas §3 step 3) ──
+        print("-- scenario 24: bank charge auto-drafts DR 6000 / CR 1010")
+        bc_je = BankChargeService.create_draft(
+            organization=org, entity=holdco,
+            bank_account=A["1010"],
+            amount=Decimal("12.50"),
+            charge_date=date(2026, 4, 27),
+            expense_account=A["6000"],
+            description="Wire transfer fee",
+            user=alice,
+        )
+        bc_je.refresh_from_db()
+        assert bc_je.status == bc.JE_DRAFT
+        rows = {ln.account.code: (ln.debit, ln.credit) for ln in bc_je.lines.all()}
+        assert rows["6000"] == (Decimal("12.5000"), Decimal("0")), rows
+        assert rows["1010"] == (Decimal("0"), Decimal("12.5000")), rows
+        assert bc_je.source_type == bc.SOURCE_BANK_TRANSACTION
+        # Goes through the standard approval flow
+        JournalService.submit_for_approval(bc_je, user=alice)
+        JournalService.approve(bc_je, user=bob)
+        JournalService.post(bc_je, user=bob)
+        bc_je.refresh_from_db()
+        assert bc_je.status == bc.JE_POSTED
+        print(f"  OK bank-charge {bc_je.entry_number} posted "
+              f"(DR 6000 12.50 / CR 1010 12.50)")
+
+        # Validation guards
+        try:
+            BankChargeService.create_draft(
+                organization=org, entity=holdco,
+                bank_account=A["1010"],
+                amount=Decimal("-1"),  # negative
+                charge_date=date(2026, 4, 27),
+                expense_account=A["6000"],
+                user=alice,
+            )
+            print("  FAIL: negative amount accepted")
+            sys.exit(1)
+        except ValidationError as e:
+            assert e.code == "BC001", e.code
+            print(f"  OK blocked negative amount: {e.message}")
+        try:
+            BankChargeService.create_draft(
+                organization=org, entity=holdco,
+                bank_account=A["6000"],  # not a bank/cash subtype
+                amount=Decimal("5"),
+                charge_date=date(2026, 4, 27),
+                expense_account=A["6000"],
+                user=alice,
+            )
+            print("  FAIL: non-bank account accepted")
+            sys.exit(1)
+        except ValidationError as e:
+            assert e.code == "BC003", e.code
+            print(f"  OK blocked non-bank account: {e.message}")
+
+        # ── 25. 4-eyes posting — entity flag enforces approver != poster ──
+        print("-- scenario 25: 4-eyes posting blocks self-post when required")
+        holdco.four_eyes_posting_required = True
+        holdco.save(update_fields=["four_eyes_posting_required"])
+
+        je_4eyes = JournalService.create_draft(
+            organization=org, entity=holdco, date=date(2026, 4, 28),
+            currency="USD", memo="4-eyes test",
+            lines=[
+                {"account_id": A["6000"].id, "debit": Decimal("20")},
+                {"account_id": A["1010"].id, "credit": Decimal("20")},
+            ],
+            user=alice,
+        )
+        JournalService.submit_for_approval(je_4eyes, user=alice)
+        JournalService.approve(je_4eyes, user=bob)
+        # Bob (the approver) must NOT be allowed to post when 4-eyes is on.
+        try:
+            JournalService.post(je_4eyes, user=bob)
+            print("  FAIL: approver allowed to self-post under 4-eyes")
+            sys.exit(1)
+        except SelfApproval as e:
+            print(f"  OK blocked: {e.message[:80]}...")
+        # A different user (alice) can post — she didn't approve this one.
+        JournalService.post(je_4eyes, user=alice)
+        je_4eyes.refresh_from_db()
+        assert je_4eyes.status == bc.JE_POSTED
+        print(f"  OK {je_4eyes.entry_number} posted by separate user under 4-eyes")
+        # Reset for any later scenarios
+        holdco.four_eyes_posting_required = False
+        holdco.save(update_fields=["four_eyes_posting_required"])
+
+        # ── 26. PostingRule registry — Thomas's 5 default rules seeded ──
+        print("-- scenario 26: posting-rule registry covers the 5 txn types")
+        # Seeder runs in migration; ensure_seeded is idempotent.
+        created = PostingRuleService.ensure_seeded(organization=org)
+        rules = PostingRuleService.list_active(organization=org)
+        codes = sorted(r.transaction_type for r in rules)
+        expected = sorted([
+            "supplier_invoice", "customer_invoice",
+            "supplier_payment", "customer_receipt", "bank_charge",
+        ])
+        assert set(expected).issubset(set(codes)), (
+            f"missing rules: {set(expected) - set(codes)}"
+        )
+        print(f"  registry has {len(rules)} active rules "
+              f"(seeded={created} this run)")
+        # Sample rule lookups
+        sup_inv = PostingRuleService.get(
+            organization=org, transaction_type="supplier_invoice",
+        )
+        assert sup_inv.debit_role == "expense"
+        assert sup_inv.credit_role == "accounts_payable"
+        bc_rule = PostingRuleService.get(
+            organization=org, transaction_type="bank_charge",
+        )
+        assert bc_rule.debit_role == "bank_charge_expense"
+        assert bc_rule.credit_role == "bank"
+        print(f"  OK supplier_invoice → DR {sup_inv.debit_role} / CR {sup_inv.credit_role}")
+        print(f"  OK bank_charge      → DR {bc_rule.debit_role} / CR {bc_rule.credit_role}")
+        # Unknown type → ValidationError
+        try:
+            PostingRuleService.get(organization=org, transaction_type="nonexistent")
+            print("  FAIL: unknown txn type returned a rule")
+            sys.exit(1)
+        except ValidationError as e:
+            assert e.code == "PR001", e.code
+            print(f"  OK unknown txn type rejected: {e.code}")
+
+        # ── 27. Tier 1: bank-to-bank transfer (same currency) ──────────
+        print("-- scenario 27: bank transfer DR 1012 / CR 1010 (USD same-ccy)")
+        # Need a second USD bank to transfer between — 1011 is EUR, so add 1012.
+        bank2 = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="1012",
+            defaults={
+                "name": "Cash — HoldCo Secondary USD Bank",
+                "account_type": bc.ACCOUNT_TYPE_ASSET,
+                "account_subtype": "bank",
+                "currency": "USD",
+            },
+        )[0]
+        # Explicitly mark 1011 as EUR so the cross-currency check fires below.
+        # (setup_world doesn't set Account.currency; lines pass it per-line.)
+        A["1010"].currency = "USD"; A["1010"].save(update_fields=["currency"])
+        A["1011"].currency = "EUR"; A["1011"].save(update_fields=["currency"])
+        xfer_je = BankTransferService.transfer(
+            organization=org, entity=holdco,
+            source_account=A["1010"], target_account=bank2,
+            amount=Decimal("500"),
+            transfer_date=date(2026, 4, 28),
+            description="Sweep to secondary",
+            user=alice,
+        )
+        xfer_rows = {ln.account.code: (ln.debit, ln.credit) for ln in xfer_je.lines.all()}
+        assert xfer_rows["1012"] == (Decimal("500.0000"), Decimal("0")), xfer_rows
+        assert xfer_rows["1010"] == (Decimal("0"), Decimal("500.0000")), xfer_rows
+        # Cross-currency must raise
+        try:
+            BankTransferService.transfer(
+                organization=org, entity=holdco,
+                source_account=A["1010"], target_account=A["1011"],  # USD→EUR
+                amount=Decimal("100"),
+                transfer_date=date(2026, 4, 28),
+                user=alice,
+            )
+            print("  FAIL: cross-currency transfer accepted")
+            sys.exit(1)
+        except ValidationError as e:
+            assert e.code == "BT005", e.code
+            print(f"  OK cross-currency blocked: {e.code}")
+        print(f"  OK transfer JE {xfer_je.entry_number}: DR 1012 500 / CR 1010 500")
+
+        # ── 28. Tier 1: bank interest received ──────────────────────────
+        print("-- scenario 28: bank interest DR 1010 / CR Interest Income")
+        # Seed an interest-income revenue account so auto-resolve picks it.
+        interest_inc = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="4100",
+            defaults={
+                "name": "Bank Interest Income",
+                "account_type": bc.ACCOUNT_TYPE_REVENUE,
+                "account_subtype": "other_income",
+            },
+        )[0]
+        int_je = BankInterestService.record(
+            organization=org, entity=holdco,
+            bank_account=A["1010"], amount=Decimal("3.45"),
+            date=date(2026, 4, 30),
+            description="Q1 interest",
+            user=alice,
+        )
+        int_rows = {ln.account.code: (ln.debit, ln.credit) for ln in int_je.lines.all()}
+        assert int_rows["1010"] == (Decimal("3.4500"), Decimal("0")), int_rows
+        assert int_rows["4100"] == (Decimal("0"), Decimal("3.4500")), int_rows
+        print(f"  OK interest JE {int_je.entry_number}: DR 1010 3.45 / CR 4100 3.45")
+
+        # ── 29. Tier 1: owner capital contribution ──────────────────────
+        print("-- scenario 29: owner contribution DR 1010 / CR Capital")
+        capital = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="3010",
+            defaults={
+                "name": "Owner Capital",
+                "account_type": bc.ACCOUNT_TYPE_EQUITY,
+                "account_subtype": "capital",
+            },
+        )[0]
+        cap_je = OwnerContributionService.record(
+            organization=org, entity=holdco,
+            bank_account=A["1010"], amount=Decimal("10000"),
+            date=date(2026, 4, 5),
+            description="Initial capital",
+            user=alice,
+        )
+        cap_rows = {ln.account.code: (ln.debit, ln.credit) for ln in cap_je.lines.all()}
+        assert cap_rows["1010"] == (Decimal("10000.0000"), Decimal("0")), cap_rows
+        assert cap_rows["3010"] == (Decimal("0"), Decimal("10000.0000")), cap_rows
+        print(f"  OK contribution JE {cap_je.entry_number}: DR 1010 10000 / CR 3010 10000")
+
+        # ── 30. Tier 1: vendor credit note ─────────────────────────────
+        print("-- scenario 30: vendor credit note DR AP / CR Expense")
+        vendor = Vendor.objects.get(organization=org, code="STAPLES")
+        vcn_je = VendorCreditNoteService.create_draft(
+            organization=org, entity=holdco, vendor=vendor,
+            amount=Decimal("25.00"),
+            credit_note_date=date(2026, 4, 26),
+            expense_account=A["6000"],
+            description="Staples refund — wrong item",
+            user=alice,
+        )
+        vcn_rows = {ln.account.code: (ln.debit, ln.credit) for ln in vcn_je.lines.all()}
+        # AP code may differ depending on what the entity has seeded.
+        ap_lines = [c for c, dc in vcn_rows.items() if dc[0] > 0 and c != "6000"]
+        assert len(ap_lines) == 1, vcn_rows
+        ap_code = ap_lines[0]
+        assert vcn_rows[ap_code] == (Decimal("25.0000"), Decimal("0")), vcn_rows
+        assert vcn_rows["6000"] == (Decimal("0"), Decimal("25.0000")), vcn_rows
+        JournalService.submit_for_approval(vcn_je, user=alice)
+        JournalService.approve(vcn_je, user=bob)
+        JournalService.post(vcn_je, user=bob)
+        vcn_je.refresh_from_db()
+        assert vcn_je.status == bc.JE_POSTED
+        print(f"  OK vendor CN {vcn_je.entry_number}: DR {ap_code} 25 / CR 6000 25")
+
+        # ── 31. Tier 1: customer credit note ───────────────────────────
+        print("-- scenario 31: customer credit note DR Revenue / CR AR")
+        customer = Customer.objects.get(organization=org, code="ACME")
+        ccn_je = CustomerCreditNoteService.create_draft(
+            organization=org, entity=holdco, customer=customer,
+            amount=Decimal("100.00"),
+            credit_note_date=date(2026, 4, 27),
+            revenue_account=A["4000"],
+            description="ACME service credit",
+            user=alice,
+        )
+        ccn_rows = {ln.account.code: (ln.debit, ln.credit) for ln in ccn_je.lines.all()}
+        assert ccn_rows["4000"] == (Decimal("100.0000"), Decimal("0")), ccn_rows
+        ar_lines = [c for c, dc in ccn_rows.items() if dc[1] > 0 and c != "4000"]
+        assert len(ar_lines) == 1, ccn_rows
+        ar_code = ar_lines[0]
+        assert ccn_rows[ar_code] == (Decimal("0"), Decimal("100.0000")), ccn_rows
+        JournalService.submit_for_approval(ccn_je, user=alice)
+        JournalService.approve(ccn_je, user=bob)
+        JournalService.post(ccn_je, user=bob)
+        ccn_je.refresh_from_db()
+        assert ccn_je.status == bc.JE_POSTED
+        print(f"  OK customer CN {ccn_je.entry_number}: DR 4000 100 / CR {ar_code} 100")
+
+        # ── 32. Tier 1: VAT remittance ─────────────────────────────────
+        print("-- scenario 32: VAT remittance DR 2200 / CR 1010")
+        vat_je = VATRemittanceService.record(
+            organization=org, entity=holdco,
+            bank_account=A["1010"], amount=Decimal("72.90"),
+            date=date(2026, 4, 30),
+            description="Q1 net VAT remittance",
+            user=alice,
+        )
+        vat_rows = {ln.account.code: (ln.debit, ln.credit) for ln in vat_je.lines.all()}
+        assert vat_rows["2200"] == (Decimal("72.9000"), Decimal("0")), vat_rows
+        assert vat_rows["1010"] == (Decimal("0"), Decimal("72.9000")), vat_rows
+        # Validation: amount must be positive
+        try:
+            VATRemittanceService.record(
+                organization=org, entity=holdco,
+                bank_account=A["1010"], amount=Decimal("0"),
+                date=date(2026, 4, 30),
+                user=alice,
+            )
+            print("  FAIL: zero amount accepted")
+            sys.exit(1)
+        except ValidationError as e:
+            assert e.code == "VR001", e.code
+            print(f"  OK zero amount blocked: {e.code}")
+        print(f"  OK VAT remit JE {vat_je.entry_number}: DR 2200 72.90 / CR 1010 72.90")
+
+        # ── 33. Posting-rule registry now covers 11 transaction types ──
+        print("-- scenario 33: registry includes Tier 1 expansion")
+        rules = PostingRuleService.list_active(organization=org)
+        codes = {r.transaction_type for r in rules}
+        tier1_expected = {
+            "bank_transfer", "bank_interest", "owner_contribution",
+            "vendor_credit_note", "customer_credit_note", "vat_remittance",
+        }
+        assert tier1_expected.issubset(codes), f"missing: {tier1_expected - codes}"
+        assert len(codes) >= 11, f"expected >= 11 active rules, got {len(codes)}"
+        print(f"  OK registry has {len(codes)} active rules incl. all Tier 1")
+
+        # ── 34. Tier 2: Loan drawdown + repayment + accrual ────────────
+        print("-- scenario 34: loan drawdown / repayment / accrual (LIABILITY)")
+        # Need: a Loan master row, a loan_payable account, an interest_expense account.
+        loan_payable = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="2300",
+            defaults={
+                "name": "Mortgage Payable",
+                "account_type": bc.ACCOUNT_TYPE_LIABILITY,
+                "account_subtype": "loan_payable",
+            },
+        )[0]
+        interest_exp = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="6300",
+            defaults={
+                "name": "Mortgage Interest Expense",
+                "account_type": bc.ACCOUNT_TYPE_EXPENSE,
+                "account_subtype": "operating_expense",
+            },
+        )[0]
+        the_loan, _ = Loan.objects.update_or_create(
+            organization=org, loan_id="LN_MORTGAGE_001",
+            defaults={
+                "loan_name": "Mortgage Loan 001",
+                "loan_type": Loan.LOAN_TYPE_MORTGAGE,
+                "loan_side": Loan.LOAN_SIDE_LIABILITY,
+                "status": Loan.STATUS_ACTIVE,
+            },
+        )
+        # Drawdown
+        drw = LoanService.drawdown(
+            organization=org, entity=holdco, loan=the_loan,
+            bank_account=A["1010"], amount=Decimal("100000"),
+            date=date(2026, 4, 5), description="Mortgage drawdown",
+            user=alice,
+        )
+        drw_rows = {ln.account.code: (ln.debit, ln.credit) for ln in drw.lines.all()}
+        assert drw_rows["1010"] == (Decimal("100000.0000"), Decimal("0")), drw_rows
+        # Loan payable account auto-resolved by subtype — could be 2300 (just
+        # created) or another loan_payable on the entity. Verify by subtype.
+        liab_lines = [ln for ln in drw.lines.all()
+                      if ln.account.account_subtype == "loan_payable"]
+        assert len(liab_lines) == 1
+        assert liab_lines[0].credit == Decimal("100000.0000")
+        liab_code = liab_lines[0].account.code
+        # Confirm dimension_loan_id stamped on every line
+        assert all(ln.dimension_loan_id == the_loan.id for ln in drw.lines.all())
+        print(f"  OK drawdown {drw.entry_number}: DR 1010 100000 / CR 2300 100000 [LOAN tag]")
+
+        # Repayment with split
+        rep = LoanService.repayment(
+            organization=org, entity=holdco, loan=the_loan,
+            bank_account=A["1010"],
+            principal=Decimal("500"), interest=Decimal("250"),
+            date=date(2026, 4, 30), description="Monthly mortgage payment",
+            user=alice,
+        )
+        rep_rows = {ln.account.code: (ln.debit, ln.credit) for ln in rep.lines.all()}
+        assert rep_rows[liab_code] == (Decimal("500.0000"), Decimal("0")), rep_rows
+        # Interest expense auto-resolved by name match — find it by subtype.
+        int_lines = [ln for ln in rep.lines.all()
+                     if ln.account.account_type == "expense" and "interest" in (ln.account.name or "").lower()]
+        assert len(int_lines) == 1, [ln.account.code for ln in rep.lines.all()]
+        assert int_lines[0].debit == Decimal("250.0000")
+        int_code = int_lines[0].account.code
+        assert rep_rows["1010"] == (Decimal("0"), Decimal("750.0000")), rep_rows
+        print(f"  OK repayment {rep.entry_number}: DR {liab_code} 500 + DR {int_code} 250 / CR 1010 750")
+
+        # Accrue interest
+        acc = LoanService.accrue_interest(
+            organization=org, entity=holdco, loan=the_loan,
+            amount=Decimal("83.33"), date=date(2026, 4, 30),
+            description="April interest accrual", user=alice,
+        )
+        acc_rows = {ln.account.code: (ln.debit, ln.credit) for ln in acc.lines.all()}
+        assert acc_rows[int_code] == (Decimal("83.3300"), Decimal("0")), acc_rows
+        assert acc_rows[liab_code] == (Decimal("0"), Decimal("83.3300")), acc_rows
+        print(f"  OK accrual {acc.entry_number}: DR {int_code} 83.33 / CR {liab_code} 83.33")
+
+        # ── 35. Tier 2: Capital call + distribution ────────────────────
+        print("-- scenario 35: PE capital call + distribution (return + gain)")
+        investment_acct = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="1450",
+            defaults={
+                "name": "PE Investments",
+                "account_type": bc.ACCOUNT_TYPE_ASSET,
+                "account_subtype": "investment",
+            },
+        )[0]
+        investment_gain = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="4200",
+            defaults={
+                "name": "PE Realised Gain",
+                "account_type": bc.ACCOUNT_TYPE_REVENUE,
+                "account_subtype": "investment_income",
+            },
+        )[0]
+        the_com, _ = Commitment.objects.update_or_create(
+            organization=org, commitment_id="COM_PE_001",
+            defaults={
+                "commitment_name": "PE Fund I",
+                "commitment_type": "LP_FUND",
+                "status": Commitment.STATUS_ACTIVE,
+                "active_flag": True,
+            },
+        )
+        cc_je = CommitmentService.capital_call(
+            organization=org, entity=holdco, commitment=the_com,
+            bank_account=A["1010"], investment_account=investment_acct,
+            amount=Decimal("25000"), date=date(2026, 4, 10),
+            description="Q2 capital call", user=alice,
+        )
+        cc_rows = {ln.account.code: (ln.debit, ln.credit) for ln in cc_je.lines.all()}
+        assert cc_rows["1450"] == (Decimal("25000.0000"), Decimal("0")), cc_rows
+        assert cc_rows["1010"] == (Decimal("0"), Decimal("25000.0000")), cc_rows
+        assert all(ln.dimension_commitment_id == the_com.id for ln in cc_je.lines.all())
+        print(f"  OK capital call {cc_je.entry_number}: DR 1450 25000 / CR 1010 25000 [COM tag]")
+
+        # Distribution: 10000 return of capital + 3000 gain = 13000 total
+        dist = CommitmentService.distribution(
+            organization=org, entity=holdco, commitment=the_com,
+            bank_account=A["1010"], investment_account=investment_acct,
+            gain_account=investment_gain,
+            return_of_capital=Decimal("10000"),
+            gain=Decimal("3000"),
+            date=date(2026, 4, 28),
+            description="Distribution received", user=alice,
+        )
+        d_rows = {ln.account.code: (ln.debit, ln.credit) for ln in dist.lines.all()}
+        assert d_rows["1010"] == (Decimal("13000.0000"), Decimal("0")), d_rows
+        assert d_rows["1450"] == (Decimal("0"), Decimal("10000.0000")), d_rows
+        assert d_rows["4200"] == (Decimal("0"), Decimal("3000.0000")), d_rows
+        print(f"  OK distribution {dist.entry_number}: DR 1010 13000 / CR 1450 10000 + CR 4200 3000")
+
+        # ── 36. Tier 2: Property — rental income + expense ─────────────
+        print("-- scenario 36: rental income + property expense")
+        rental_inc = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="4300",
+            defaults={
+                "name": "Rental Income",
+                "account_type": bc.ACCOUNT_TYPE_REVENUE,
+                "account_subtype": "operating_revenue",
+            },
+        )[0]
+        property_exp = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="6400",
+            defaults={
+                "name": "Property Maintenance",
+                "account_type": bc.ACCOUNT_TYPE_EXPENSE,
+                "account_subtype": "operating_expense",
+            },
+        )[0]
+        the_prop, _ = Property.objects.update_or_create(
+            organization=org, property_id="PROP_RES_001",
+            defaults={
+                "property_name": "Zurich Residence",
+                "property_type": "RESIDENTIAL",
+                "status": Property.STATUS_ACTIVE,
+                "active_flag": True,
+            },
+        )
+        rent_je = PropertyService.rental_income(
+            organization=org, entity=holdco, property=the_prop,
+            bank_account=A["1010"], income_account=rental_inc,
+            amount=Decimal("4000"), date=date(2026, 4, 1),
+            description="April rent", user=alice,
+        )
+        rent_rows = {ln.account.code: (ln.debit, ln.credit) for ln in rent_je.lines.all()}
+        assert rent_rows["1010"] == (Decimal("4000.0000"), Decimal("0")), rent_rows
+        assert rent_rows["4300"] == (Decimal("0"), Decimal("4000.0000")), rent_rows
+        assert all(ln.dimension_property_id == the_prop.id for ln in rent_je.lines.all())
+        print(f"  OK rental {rent_je.entry_number}: DR 1010 4000 / CR 4300 4000 [PROP tag]")
+
+        prop_exp_je = PropertyService.property_expense(
+            organization=org, entity=holdco, property=the_prop,
+            bank_account=A["1010"], expense_account=property_exp,
+            amount=Decimal("350"), date=date(2026, 4, 15),
+            description="Plumbing repair", user=alice,
+        )
+        pe_rows = {ln.account.code: (ln.debit, ln.credit) for ln in prop_exp_je.lines.all()}
+        assert pe_rows["6400"] == (Decimal("350.0000"), Decimal("0")), pe_rows
+        assert pe_rows["1010"] == (Decimal("0"), Decimal("350.0000")), pe_rows
+        print(f"  OK prop expense {prop_exp_je.entry_number}: DR 6400 350 / CR 1010 350 [PROP tag]")
+
+        # ── 37. Tier 2: Insurance — premium + claim ────────────────────
+        print("-- scenario 37: insurance premium + claim received")
+        ins_exp = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="6500",
+            defaults={
+                "name": "Insurance Expense",
+                "account_type": bc.ACCOUNT_TYPE_EXPENSE,
+                "account_subtype": "operating_expense",
+            },
+        )[0]
+        ins_recovery = Account.objects.update_or_create(
+            organization=org, entity=holdco, code="4400",
+            defaults={
+                "name": "Insurance Recovery",
+                "account_type": bc.ACCOUNT_TYPE_REVENUE,
+                "account_subtype": "other_income",
+            },
+        )[0]
+        the_pol, _ = Policy.objects.update_or_create(
+            organization=org, policy_id="POL_HOME_001",
+            defaults={
+                "policy_name": "Home Insurance",
+                "policy_type": "HOME",
+                "status": Policy.STATUS_ACTIVE,
+                "active_flag": True,
+            },
+        )
+        prem_je = InsuranceService.premium_paid(
+            organization=org, entity=holdco, policy=the_pol,
+            bank_account=A["1010"], expense_account=ins_exp,
+            amount=Decimal("1200"), date=date(2026, 4, 1),
+            description="Annual home insurance", user=alice,
+        )
+        prem_rows = {ln.account.code: (ln.debit, ln.credit) for ln in prem_je.lines.all()}
+        assert prem_rows["6500"] == (Decimal("1200.0000"), Decimal("0")), prem_rows
+        assert prem_rows["1010"] == (Decimal("0"), Decimal("1200.0000")), prem_rows
+        assert all(ln.dimension_policy_id == the_pol.id for ln in prem_je.lines.all())
+        print(f"  OK premium {prem_je.entry_number}: DR 6500 1200 / CR 1010 1200 [POL tag]")
+
+        claim_je = InsuranceService.claim_received(
+            organization=org, entity=holdco, policy=the_pol,
+            bank_account=A["1010"], recovery_account=ins_recovery,
+            amount=Decimal("800"), date=date(2026, 4, 20),
+            description="Storm damage claim", user=alice,
+        )
+        claim_rows = {ln.account.code: (ln.debit, ln.credit) for ln in claim_je.lines.all()}
+        assert claim_rows["1010"] == (Decimal("800.0000"), Decimal("0")), claim_rows
+        assert claim_rows["4400"] == (Decimal("0"), Decimal("800.0000")), claim_rows
+        print(f"  OK claim {claim_je.entry_number}: DR 1010 800 / CR 4400 800 [POL tag]")
+
+        # ── 38. Posting-rule registry now covers 20 transaction types ──
+        print("-- scenario 38: registry includes Tier 2 expansion")
+        rules2 = PostingRuleService.list_active(organization=org)
+        codes2 = {r.transaction_type for r in rules2}
+        tier2_expected = {
+            "loan_drawdown", "loan_repayment", "loan_interest_accrual",
+            "capital_call", "distribution",
+            "rental_income", "property_expense",
+            "insurance_premium", "insurance_claim",
+        }
+        assert tier2_expected.issubset(codes2), f"missing: {tier2_expected - codes2}"
+        assert len(codes2) >= 20, f"expected >= 20 active rules, got {len(codes2)}"
+        print(f"  OK registry has {len(codes2)} active rules incl. all Tier 2")
 
         print("OK: kernel smoke test passed — rolling back.")
         transaction.savepoint_rollback(sid)

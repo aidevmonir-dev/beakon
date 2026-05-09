@@ -17,7 +17,7 @@ from typing import Any
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from beakon_core.models import Account, TaxLot
+from beakon_core.models import Account, Custodian, Instrument, Portfolio, TaxLot
 from organizations.models import Organization
 
 
@@ -96,14 +96,17 @@ class Command(BaseCommand):
         ws = wb[SHEET_NAME]
         rows = _rows_by_header(ws)
 
-        # Pre-build account lookup so the import is one query, not N+1.
-        account_lookup = {
-            a.code: a for a in Account.objects.filter(organization=org)
-        }
+        # Pre-build lookups so the import is bulk, not N+1.
+        account_lookup = {a.code: a for a in Account.objects.filter(organization=org)}
+        instrument_lookup = {i.instrument_id: i for i in Instrument.objects.filter(organization=org)}
+        portfolio_lookup = {p.portfolio_id: p for p in Portfolio.objects.filter(organization=org)}
+        custodian_lookup = {c.custodian_id: c for c in Custodian.objects.filter(organization=org)}
 
         stats = {
             "created": 0, "updated": 0, "skipped_no_id": 0,
-            "skipped_explanation_row": 0, "linked_account": 0,
+            "skipped_explanation_row": 0,
+            "linked_account": 0, "linked_instrument": 0,
+            "linked_portfolio": 0, "linked_custodian": 0,
         }
         errors: list[str] = []
 
@@ -119,7 +122,11 @@ class Command(BaseCommand):
                     stats["skipped_explanation_row"] += 1
                     continue
 
-                defaults = self._build_defaults(row, account_lookup, errors, stats)
+                defaults = self._build_defaults(
+                    row, account_lookup,
+                    instrument_lookup, portfolio_lookup, custodian_lookup,
+                    errors, stats,
+                )
                 _, created = TaxLot.objects.update_or_create(
                     organization=org,
                     tax_lot_id=tax_lot_id,
@@ -145,7 +152,9 @@ class Command(BaseCommand):
 
     # ─────────────── per-row mapping ─────────────── #
 
-    def _build_defaults(self, row: dict[str, Any], account_lookup, errors, stats) -> dict:
+    def _build_defaults(self, row, account_lookup,
+                        instrument_lookup, portfolio_lookup, custodian_lookup,
+                        errors, stats) -> dict:
         defaults: dict[str, Any] = {}
         metadata: dict[str, Any] = {}
 
@@ -179,6 +188,25 @@ class Command(BaseCommand):
                 errors.append(
                     f"Tax lot '{defaults.get('tax_lot_id')}' references "
                     f"unknown Account_No '{account_no}'."
+                )
+
+        # Resolve cross-master FKs from string codes (instrument/portfolio/custodian).
+        for code_field, fk_field, lookup, stat_key, label in (
+            ("instrument_code", "instrument", instrument_lookup, "linked_instrument", "Instrument"),
+            ("portfolio_code", "portfolio", portfolio_lookup, "linked_portfolio", "Portfolio"),
+            ("custodian_code", "custodian", custodian_lookup, "linked_custodian", "Custodian"),
+        ):
+            code = _text(defaults.get(code_field))
+            if not code:
+                continue
+            target = lookup.get(code)
+            if target is not None:
+                defaults[fk_field] = target
+                stats[stat_key] += 1
+            else:
+                errors.append(
+                    f"Tax lot '{defaults.get('tax_lot_id')}' references "
+                    f"unknown {label} code '{code}' in column {code_field}."
                 )
 
         defaults["workbook_metadata"] = metadata

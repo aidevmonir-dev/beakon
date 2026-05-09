@@ -15,7 +15,7 @@ import {
   BookOpen, Plus, X, Search, ChevronDown, ChevronRight, Building2,
   Landmark, Wallet, Scale, TrendingUp, TrendingDown, MoreHorizontal,
   Layers, Globe, Info, Archive, Pencil, AlertCircle, Check,
-  ArrowUp, ArrowDown, Command,
+  ArrowUp, ArrowDown, Command, Sparkles,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -262,10 +262,10 @@ export default function AccountsPage() {
     setLoading(true);
     const entParam = entityId ? `?entity_id=${entityId}` : "";
     const [ents, accs, sum, cat] = await Promise.all([
-      api.get<{ results: Entity[] } | Entity[]>("/beakon/entities/")
+      api.get<{ results: Entity[] } | Entity[]>("/beakon/entities/", { is_active: "true" })
         .then((d) => (Array.isArray(d) ? d : d.results ?? []))
         .catch(() => []),
-      api.get<{ results: Account[] } | Account[]>("/beakon/accounts/")
+      api.get<{ results: Account[] } | Account[]>("/beakon/accounts/", { page_size: "1000" })
         .then((d) => (Array.isArray(d) ? d : d.results ?? []))
         .catch(() => []),
       api.get<SummaryResp>(`/beakon/accounts/summary/${entParam}`)
@@ -516,9 +516,17 @@ export default function AccountsPage() {
           ) : null
         }
         actions={
-          <button onClick={() => setDrawer({ mode: "create" })} className="btn-primary">
-            <Plus className="w-4 h-4 mr-1.5" /> New Account
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href="/dashboard/accounts/import"
+              className="inline-flex items-center gap-1.5 rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-100"
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Import with AI
+            </a>
+            <button onClick={() => setDrawer({ mode: "create" })} className="btn-primary">
+              <Plus className="w-4 h-4 mr-1.5" /> New Account
+            </button>
+          </div>
         }
       />
 

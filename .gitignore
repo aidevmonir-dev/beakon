@@ -42,3 +42,9 @@ Thumbs.db
 htmlcov/
 .coverage
 .coverage.*
+
+# Local-only / sensitive
+.claude/
+_db_backup_*.sql
+demo_statements/
+monir/

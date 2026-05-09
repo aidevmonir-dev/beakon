@@ -9,6 +9,7 @@ class BankAccountSerializer(serializers.ModelSerializer):
     entity_type = serializers.SerializerMethodField()
     account_code = serializers.SerializerMethodField()
     account_name = serializers.SerializerMethodField()
+    gl_balance = serializers.SerializerMethodField()
 
     class Meta:
         model = BankAccount
@@ -16,14 +17,32 @@ class BankAccountSerializer(serializers.ModelSerializer):
             "id", "name", "bank_name", "account_number_last4",
             "entity", "entity_code", "entity_name", "entity_type",
             "account", "account_code", "account_name",
-            "currency", "opening_balance", "is_active", "notes",
+            "currency", "opening_balance", "gl_balance",
+            "is_active", "notes",
             "created_at", "updated_at",
         )
         read_only_fields = (
             "id", "entity_code", "entity_name", "entity_type",
-            "account_code", "account_name",
+            "account_code", "account_name", "gl_balance",
             "created_at", "updated_at",
         )
+
+    def get_gl_balance(self, obj):
+        # Annotated by BankAccountViewSet.get_queryset(); falls back to a
+        # per-row aggregate when the queryset wasn't annotated (e.g. when
+        # the serializer is reused for create/update where annotation is
+        # discarded).
+        from decimal import Decimal
+        from django.db.models import Sum, F
+        bal = getattr(obj, "gl_balance", None)
+        if bal is not None:
+            return str(bal)
+        agg = obj.account.journal_lines.filter(
+            journal_entry__status="posted",
+        ).aggregate(
+            d=Sum("debit"), c=Sum("credit"),
+        )
+        return str((agg["d"] or Decimal("0")) - (agg["c"] or Decimal("0")))
 
     def get_entity_code(self, obj):
         return obj.entity.code

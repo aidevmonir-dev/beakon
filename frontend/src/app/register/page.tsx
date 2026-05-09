@@ -2,127 +2,67 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
-import { ArrowRight, Check, Minus } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Check,
+  Eye,
+  EyeOff,
+  Lock,
+  Mail,
+  ShieldCheck,
+  Sparkles,
+  User,
+} from "lucide-react";
 import { login, register } from "@/lib/api";
+import Logo from "@/components/logo";
 
-const plans = [
-  {
-    name: "Essentials",
-    description: "Solopreneurs and early stage businesses",
-    price: "$65",
-    suffix: "/mo",
-    tone: "bg-[#dcf7fb]",
-    accent: "bg-[#54d7df]",
-    button: "Start free trial",
-    buttonStyle: "bg-[#16efc8] text-black hover:bg-[#08ddb8]",
-  },
-  {
-    name: "Core",
-    description: "Small businesses and growing companies",
-    price: "$100",
-    suffix: "/mo",
-    tone: "bg-[#dff8ef]",
-    accent: "bg-[#29dcc6]",
-    badge: "Most Popular",
-    button: "Start free trial",
-    buttonStyle: "bg-[#16efc8] text-black hover:bg-[#08ddb8]",
-  },
-  {
-    name: "Advanced",
-    description: "Multi entity businesses and global operations",
-    price: "Custom",
-    suffix: "",
-    tone: "bg-[#fff7d8]",
-    accent: "bg-[#ffc63a]",
-    button: "Request early access",
-    buttonStyle: "border border-[#ccd2dd] bg-white text-[#61697a] hover:bg-[#f6f7fb]",
-  },
-];
+const PLAN_LABELS: Record<string, { name: string; price: string; cadence?: string; audience: string }> = {
+  starter: { name: "Starter", price: "CHF 79", cadence: "/ mo", audience: "Single company / simple setup" },
+  professional: { name: "Professional", price: "CHF 199", cadence: "/ mo", audience: "SMEs / growing structures" },
+  family: { name: "Family Office", price: "CHF 490", cadence: "/ mo", audience: "Complex / multi-entity structures" },
+  enterprise: { name: "Enterprise / Fiduciary", price: "Custom", audience: "Larger firms / platforms" },
+};
 
-const features = [
-  {
-    title: "Live Dashboards & Financials",
-    note: "Your finances at your fingertips",
-    availability: [true, true, true],
-  },
-  {
-    title: "Invoicing & Bill Pay",
-    note: "Pay & get paid faster",
-    availability: [true, true, true],
-  },
-  {
-    title: "24/7 AI Bookkeeping & Reconciliation",
-    note: "Books that keep themselves",
-    availability: [true, true, true],
-  },
-  {
-    title: "Ask Digits",
-    note: "Your always-on financial assistant",
-    availability: [true, true, true],
-  },
-  {
-    title: "Vendor & Customer Tracking",
-    note: "Manage who you do business with",
-    availability: [true, true, true],
-  },
-  {
-    title: "Banking & Payroll Integrations",
-    note: "12,000+ financial institutions",
-    availability: [true, true, true],
-  },
-  {
-    title: "Revenue & Spend Integrations",
-    note: "Stripe, Ramp, BILL and more",
-    availability: [false, true, true],
-  },
-  {
-    title: "Custom Dashboards",
-    note: "Build your own view",
-    availability: [false, true, true],
-  },
-  {
-    title: "Dimensional Accounting",
-    note: "Department and location tracking",
-    availability: [false, true, true],
-  },
-  {
-    title: "Close Automation",
-    note: "Month end on autopilot",
-    availability: [false, false, true],
-  },
-  {
-    title: "Custom Management Reporting",
-    note: "Investor ready reporting",
-    availability: [false, false, true],
-  },
-  {
-    title: "Multi Entity Accounting",
-    note: "All your businesses in one place",
-    availability: [false, false, true],
-  },
+const VALUE_BULLETS = [
+  "Multi-entity, intercompany & multi-currency from day one",
+  "Hosted in Switzerland · Swiss-VAT & ELM-ready",
+  "AI proposes — your team approves. Audit-traceable to source.",
 ];
 
 export default function RegisterPage() {
   const router = useRouter();
+
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [planSlug, setPlanSlug] = useState<string | null>(null);
+
+  useEffect(() => {
+    const slug = new URLSearchParams(window.location.search).get("plan");
+    if (slug && PLAN_LABELS[slug]) setPlanSlug(slug);
+  }, []);
+
+  const plan = useMemo(() => (planSlug ? PLAN_LABELS[planSlug] : null), [planSlug]);
+
+  const passwordStrength = useMemo(() => scorePassword(password), [password]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
-
     try {
       await register(email, password, firstName, lastName);
       await login(email, password);
       router.push("/setup");
     } catch (err: any) {
-      const msg = err?.email?.[0] || err?.password?.[0] || err?.detail || "Registration failed";
+      const msg =
+        err?.email?.[0] || err?.password?.[0] || err?.detail || "Registration failed";
       setError(msg);
     } finally {
       setLoading(false);
@@ -130,281 +70,371 @@ export default function RegisterPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,#f5f1fa_0%,#f8f5fb_30%,#fbfbff_68%,#ffffff_100%)] px-4 py-8 text-black sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-[1120px]">
-        <div className="mb-6 flex items-center justify-between">
-          <Link
-            href="/"
-            className="text-sm font-semibold tracking-[0.22em] text-black/70 uppercase"
-          >
-            Beakon
-          </Link>
-          <Link href="/login" className="text-sm font-medium text-black/65 hover:text-black">
-            Sign in
-          </Link>
-        </div>
+    <main className="min-h-screen bg-paper-50 text-brand-950">
+      <div className="grid min-h-screen lg:grid-cols-[1.05fr_1fr] xl:grid-cols-[1.15fr_1fr]">
+        {/* ─────────────────────── LEFT — editorial panel ─────────────────────── */}
+        <aside className="relative hidden overflow-hidden hero-mesh grain-overlay text-white lg:block">
+          <div className="absolute inset-0 dot-grid opacity-40" />
+          <div
+            aria-hidden
+            className="pointer-events-none absolute -right-32 top-32 h-[36rem] w-[36rem] rounded-full bg-mint-400/15 blur-3xl float-slow"
+          />
+          <div className="relative flex min-h-screen flex-col px-10 py-10 xl:px-14">
+            {/* Top: brand */}
+            <Link href="/" className="flex items-center gap-2" aria-label="Beakon home">
+              <Logo variant="horizontal" size={36} colors={{ text: "#ffffff" }} />
+            </Link>
 
-        <section className="rounded-[32px] border border-[#ece7f2] bg-white/80 px-4 py-8 shadow-[0_30px_80px_rgba(95,79,117,0.08)] backdrop-blur sm:px-6 lg:px-8">
-          <div className="mx-auto max-w-[640px] text-center">
-            <h1 className="text-[2.3rem] leading-[0.95] tracking-[-0.07em] text-black sm:text-[3.6rem]">
-              Accounting software
-              <span className="block font-semibold">that works for you.</span>
-            </h1>
+            {/* Middle: editorial copy */}
+            <div className="my-auto max-w-[34rem]">
+              <p
+                className="inline-flex items-center gap-2 rounded-full border border-mint-400/30 bg-mint-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-mint-200 reveal"
+                style={{ animationDelay: "60ms" }}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Start your free trial
+              </p>
+              <h1
+                className="mt-7 font-display text-[clamp(2.4rem,4.6vw,4.6rem)] font-light leading-[0.98] tracking-[-0.035em] reveal"
+                style={{ animationDelay: "180ms" }}
+              >
+                Books that{" "}
+                <em className="italic text-mint-300">balance themselves</em>.
+                <br />
+                Judgment that{" "}
+                <em className="italic text-mint-300">stays with you</em>.
+              </h1>
+              <p
+                className="mt-7 max-w-md text-[16px] leading-[1.65] text-white/65 reveal"
+                style={{ animationDelay: "320ms" }}
+              >
+                Create your Beakon workspace — multi-entity, multi-currency,
+                Swiss-hosted. Your AI bookkeeper proposes; you approve.
+              </p>
+
+              <ul
+                className="mt-9 space-y-3.5 reveal"
+                style={{ animationDelay: "440ms" }}
+              >
+                {VALUE_BULLETS.map((b) => (
+                  <li key={b} className="flex items-start gap-3 text-[14.5px] text-white/75">
+                    <span className="mt-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-mint-500/20 text-mint-300 ring-1 ring-mint-400/30">
+                      <Check className="h-3 w-3" />
+                    </span>
+                    <span>{b}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Bottom: testimonial */}
+            <figure
+              className="mt-10 max-w-[32rem] rounded-2xl border border-white/10 bg-white/[0.04] p-6 backdrop-blur reveal"
+              style={{ animationDelay: "560ms" }}
+            >
+              <span className="font-display text-[80px] font-light leading-[0.4] text-mint-300/40 select-none">
+                &ldquo;
+              </span>
+              <blockquote className="-mt-6 font-display text-[18.5px] font-light italic leading-snug text-white">
+                We replaced three spreadsheets, two reconciliation tools and a
+                monthly crisis with one system that knows our chart of accounts
+                as well as we do.
+              </blockquote>
+              <figcaption className="mt-4 flex items-center gap-3 text-[12.5px]">
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-[12px] font-semibold text-brand-950">
+                  TA
+                </span>
+                <div>
+                  <div className="font-semibold text-white">Thomas Allina</div>
+                  <div className="text-white/50">Founder, Beakon</div>
+                </div>
+              </figcaption>
+            </figure>
+
+            <div className="mt-8 flex items-center gap-4 text-[11.5px] text-white/45">
+              <span className="inline-flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5 text-mint-300" />
+                Bank-level security
+              </span>
+              <span className="text-white/15">·</span>
+              <span>Hosted in Switzerland</span>
+              <span className="text-white/15">·</span>
+              <span>SOC-aligned infrastructure</span>
+            </div>
           </div>
+        </aside>
 
-          <div className="mt-8 overflow-hidden rounded-[18px] border border-[#e8e3ea] bg-white">
-            <div className="hidden lg:block">
-              <div className="grid lg:grid-cols-[1.1fr_1fr_1fr_1fr]">
-                <div className="border-r border-[#ebe6ed] bg-white">
-                  <div className="h-[6px] bg-[#f0edf3]" />
-                  <div className="flex min-h-[158px] items-start px-4 pb-4 pt-4">
-                    <h2 className="text-sm font-semibold tracking-[-0.04em] text-black">
-                      Compare all plans
-                    </h2>
+        {/* ─────────────────────── RIGHT — form panel ─────────────────────── */}
+        <section className="relative flex flex-col bg-paper-50">
+          {/* Compact header — only matters on mobile / above form */}
+          <header className="flex items-center justify-between px-6 py-6 sm:px-10 lg:px-12">
+            <Link href="/" className="flex items-center lg:hidden" aria-label="Beakon">
+              <Logo variant="horizontal" size={32} />
+            </Link>
+            <div className="ml-auto flex items-center gap-5 text-[13.5px] text-brand-900/65">
+              <Link href="/pricing" className="hidden font-medium transition hover:text-brand-950 sm:inline">
+                Pricing
+              </Link>
+              <span>
+                Already have an account?{" "}
+                <Link href="/login" className="font-semibold text-brand-950 transition hover:text-mint-700">
+                  Sign in
+                </Link>
+              </span>
+            </div>
+          </header>
+
+          <div className="flex flex-1 items-center justify-center px-6 pb-16 sm:px-10">
+            <div className="w-full max-w-[460px]">
+              {plan && (
+                <div className="mb-6 flex items-center justify-between rounded-2xl border border-mint-200 bg-mint-50/70 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-mint-700 ring-1 ring-mint-200">
+                      <Sparkles className="h-3.5 w-3.5" />
+                    </span>
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-mint-700">
+                        Selected plan
+                      </div>
+                      <div className="font-display text-[15px] font-medium text-brand-950">
+                        {plan.name}
+                        <span className="ml-2 text-[12px] font-medium text-brand-900/55">
+                          {plan.price}
+                          {plan.cadence ?? ""}
+                        </span>
+                      </div>
+                    </div>
                   </div>
+                  <Link
+                    href="/pricing"
+                    className="text-[12px] font-semibold text-mint-700 transition hover:text-mint-600"
+                  >
+                    Change
+                  </Link>
+                </div>
+              )}
+
+              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-mint-700">
+                Create account
+              </p>
+              <h2 className="mt-3 font-display text-[clamp(2rem,3.4vw,2.6rem)] font-light leading-[1.05] tracking-[-0.025em] text-brand-950">
+                Open your{" "}
+                <em className="italic text-mint-700">workspace</em>.
+              </h2>
+              <p className="mt-3 text-[14.5px] leading-relaxed text-brand-900/60">
+                Free for 14 days. No card required. Continue to workspace
+                setup once you&apos;re in.
+              </p>
+
+              <form onSubmit={handleSubmit} className="mt-8 space-y-3.5">
+                {error && (
+                  <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50/80 px-4 py-3 text-[13px] text-red-700">
+                    <span className="mt-0.5 inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                <div className="grid gap-3.5 sm:grid-cols-2">
+                  <Field
+                    id="firstName"
+                    label="First name"
+                    icon={User}
+                    type="text"
+                    autoComplete="given-name"
+                    placeholder="Thomas"
+                    value={firstName}
+                    onChange={setFirstName}
+                  />
+                  <Field
+                    id="lastName"
+                    label="Last name"
+                    type="text"
+                    autoComplete="family-name"
+                    placeholder="Allina"
+                    value={lastName}
+                    onChange={setLastName}
+                  />
                 </div>
 
-                {plans.map((plan) => (
-                  <div
-                    key={plan.name}
-                    className={`${plan.tone} border-r border-[#ebe6ed] last:border-r-0`}
-                  >
-                    <div className={`h-[6px] ${plan.accent}`} />
-                    <div className="flex min-h-[158px] flex-col px-4 pb-4 pt-4">
-                      <div className="flex min-h-[20px] items-start justify-between gap-2">
-                        <div className="text-sm font-semibold tracking-[-0.04em] text-black">
-                          {plan.name}
-                        </div>
-                        {plan.badge ? (
-                          <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-black/70">
-                            {plan.badge}
-                          </span>
-                        ) : null}
-                      </div>
+                <Field
+                  id="email"
+                  label="Work email"
+                  icon={Mail}
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@firm.ch"
+                  value={email}
+                  onChange={setEmail}
+                />
 
-                      <p className="mt-2 min-h-[40px] text-[10px] leading-4 text-black/55 sm:text-[11px]">
-                        {plan.description}
-                      </p>
-
-                      <div className="mt-4 flex items-end gap-1">
-                        <span
-                          className={`tracking-[-0.08em] text-black ${
-                            plan.price === "Custom" ? "text-[2rem] sm:text-[2.25rem]" : "text-[2.5rem] sm:text-[3rem]"
-                          }`}
-                        >
-                          {plan.price}
-                        </span>
-                        {plan.suffix ? (
-                          <span className="pb-1 text-[11px] text-black/70">{plan.suffix}</span>
-                        ) : null}
-                      </div>
-
+                <div>
+                  <Field
+                    id="password"
+                    label="Password"
+                    icon={Lock}
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    placeholder="At least 8 characters"
+                    value={password}
+                    onChange={setPassword}
+                    minLength={8}
+                    trailing={
                       <button
                         type="button"
-                        className={`mt-4 w-full rounded-full px-3 py-2 text-[11px] font-semibold transition sm:text-xs ${plan.buttonStyle}`}
+                        onClick={() => setShowPassword((s) => !s)}
+                        className="rounded-md p-1 text-brand-900/40 transition hover:text-brand-900/80"
+                        aria-label={showPassword ? "Hide password" : "Show password"}
                       >
-                        {plan.button}
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {features.map((feature) => (
-                <div
-                  key={feature.title}
-                  className="grid min-h-[66px] border-t border-[#ebe6ed] lg:grid-cols-[1.1fr_1fr_1fr_1fr]"
-                >
-                  <div className="flex items-center border-r border-[#ebe6ed] bg-white px-4 py-3">
-                    <div>
-                      <div className="text-[12px] font-semibold leading-4 text-black sm:text-[13px]">
-                        {feature.title}
-                      </div>
-                      <div className="mt-1 text-[10px] leading-4 text-black/45 sm:text-[11px]">
-                        {feature.note}
-                      </div>
-                    </div>
-                  </div>
-
-                  {plans.map((plan, planIndex) => (
-                    <div
-                      key={`${feature.title}-${plan.name}`}
-                      className={`${plan.tone} flex items-center justify-center border-r border-[#ebe6ed] px-3 last:border-r-0`}
-                    >
-                      {feature.availability[planIndex] ? (
-                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#14ecc7] text-black">
-                          <Check className="h-3.5 w-3.5" />
-                        </span>
-                      ) : (
-                        <Minus className="h-4 w-4 text-black/35" />
-                      )}
-                    </div>
-                  ))}
+                    }
+                  />
+                  <PasswordMeter strength={passwordStrength} />
                 </div>
-              ))}
-            </div>
 
-            <div className="lg:hidden">
-              {plans.map((plan, planIndex) => (
-                <div
-                  key={plan.name}
-                  className={`${plan.tone} border-b border-[#ebe6ed] last:border-b-0`}
-                >
-                  <div className={`h-[6px] ${plan.accent}`} />
-                  <div className="px-4 pb-4 pt-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="text-sm font-semibold tracking-[-0.04em] text-black">
-                        {plan.name}
-                      </div>
-                      {plan.badge ? (
-                        <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-black/70">
-                          {plan.badge}
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="mt-2 text-[11px] leading-4 text-black/55">{plan.description}</p>
-                    <div className="mt-4 flex items-end gap-1">
-                      <span className={`tracking-[-0.08em] text-black ${plan.price === "Custom" ? "text-[2rem]" : "text-[2.5rem]"}`}>
-                        {plan.price}
-                      </span>
-                      {plan.suffix ? <span className="pb-1 text-[11px] text-black/70">{plan.suffix}</span> : null}
-                    </div>
-                    <button
-                      type="button"
-                      className={`mt-4 w-full rounded-full px-3 py-2 text-[11px] font-semibold transition ${plan.buttonStyle}`}
-                    >
-                      {plan.button}
-                    </button>
-                  </div>
-
-                  <div className="border-t border-[#ebe6ed] bg-white/55">
-                    {features.map((feature) => (
-                      <div
-                        key={`${plan.name}-${feature.title}`}
-                        className="flex items-center justify-between gap-4 border-t border-[#ebe6ed] px-4 py-3 first:border-t-0"
-                      >
-                        <div>
-                          <div className="text-[12px] font-semibold leading-4 text-black">
-                            {feature.title}
-                          </div>
-                          <div className="mt-1 text-[10px] leading-4 text-black/45">
-                            {feature.note}
-                          </div>
-                        </div>
-                        {feature.availability[planIndex] ? (
-                          <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#14ecc7] text-black">
-                            <Check className="h-3.5 w-3.5" />
-                          </span>
-                        ) : (
-                          <Minus className="h-4 w-4 shrink-0 text-black/35" />
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="border-t border-[#ece7ee] bg-white p-3">
-              <div className="flex flex-col gap-3 rounded-[14px] border border-[#ece8ef] bg-[#fbfbfd] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-[12px] font-medium text-black/70 sm:text-[13px]">
-                  Are you an accounting firm? Build an AI-native practice with Beakon.
-                </p>
                 <button
-                  type="button"
-                  className="rounded-full bg-[#16efc8] px-4 py-2 text-[11px] font-semibold text-black transition hover:bg-[#08ddb8]"
+                  type="submit"
+                  disabled={loading}
+                  className="group mt-2 inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-brand-950 text-[14px] font-semibold text-white shadow-[0_20px_40px_-20px_rgba(19,43,55,0.6)] transition hover:bg-brand-900 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Learn more
+                  {loading ? (
+                    <>
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                      Creating account…
+                    </>
+                  ) : (
+                    <>
+                      Create account
+                      <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
+                    </>
+                  )}
                 </button>
+
+                <p className="pt-1 text-center text-[11.5px] leading-relaxed text-brand-900/45">
+                  By creating an account you agree to our{" "}
+                  <a href="#" className="underline decoration-brand-900/20 underline-offset-2 transition hover:text-brand-900/80">
+                    Terms
+                  </a>{" "}
+                  and{" "}
+                  <a href="#" className="underline decoration-brand-900/20 underline-offset-2 transition hover:text-brand-900/80">
+                    Privacy Policy
+                  </a>
+                  .
+                </p>
+              </form>
+
+              <div className="mt-10 rounded-2xl border border-paper-200 bg-white px-5 py-4">
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-paper-100 text-brand-700">
+                    <ShieldCheck className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <div className="text-[13px] font-semibold text-brand-950">
+                      Are you an accounting firm?
+                    </div>
+                    <p className="mt-1 text-[12.5px] leading-relaxed text-brand-900/65">
+                      Run your book on Beakon — partner pricing for firms with
+                      multiple clients.{" "}
+                      <Link
+                        href="/pricing#partner"
+                        className="inline-flex items-center gap-0.5 font-semibold text-mint-700 transition hover:text-mint-600"
+                      >
+                        Learn more
+                        <ArrowUpRight className="h-3 w-3" />
+                      </Link>
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </section>
-
-        <section className="mx-auto mt-8 max-w-[720px] rounded-[28px] border border-[#ece7f2] bg-white/92 p-6 shadow-[0_24px_60px_rgba(95,79,117,0.08)] sm:p-8">
-          <div className="text-center">
-            <div className="text-xs font-semibold uppercase tracking-[0.28em] text-black/45">
-              Register
-            </div>
-            <h2 className="mt-3 text-[1.9rem] font-semibold tracking-[-0.05em] text-black">
-              Start your free trial
-            </h2>
-            <p className="mt-2 text-sm text-black/55">
-              Create your account and continue to workspace setup.
-            </p>
-          </div>
-
-          <form onSubmit={handleSubmit} className="mt-8 space-y-4">
-            {error ? (
-              <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {error}
-              </div>
-            ) : null}
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <input
-                id="firstName"
-                type="text"
-                className="h-12 rounded-2xl border border-[#e7e5eb] bg-[#f7f6fa] px-4 text-sm outline-none transition placeholder:text-black/35 focus:border-[#6adfcb] focus:bg-white focus:ring-4 focus:ring-[#d8fbf3]"
-                placeholder="First name"
-                autoComplete="given-name"
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
-                required
-              />
-              <input
-                id="lastName"
-                type="text"
-                className="h-12 rounded-2xl border border-[#e7e5eb] bg-[#f7f6fa] px-4 text-sm outline-none transition placeholder:text-black/35 focus:border-[#6adfcb] focus:bg-white focus:ring-4 focus:ring-[#d8fbf3]"
-                placeholder="Last name"
-                autoComplete="family-name"
-                value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
-                required
-              />
-            </div>
-
-            <input
-              id="email"
-              type="email"
-              className="h-12 w-full rounded-2xl border border-[#e7e5eb] bg-[#f7f6fa] px-4 text-sm outline-none transition placeholder:text-black/35 focus:border-[#6adfcb] focus:bg-white focus:ring-4 focus:ring-[#d8fbf3]"
-              placeholder="Work email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-
-            <input
-              id="password"
-              type="password"
-              className="h-12 w-full rounded-2xl border border-[#e7e5eb] bg-[#f7f6fa] px-4 text-sm outline-none transition placeholder:text-black/35 focus:border-[#6adfcb] focus:bg-white focus:ring-4 focus:ring-[#d8fbf3]"
-              placeholder="Create password"
-              autoComplete="new-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              minLength={8}
-              required
-            />
-
-            <button
-              type="submit"
-              className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-black px-5 text-sm font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={loading}
-            >
-              {loading ? "Creating account..." : "Create account"}
-              {!loading ? <ArrowRight className="h-4 w-4" /> : null}
-            </button>
-          </form>
-
-          <p className="mt-5 text-center text-sm text-black/55">
-            Already have an account?{" "}
-            <Link href="/login" className="font-semibold text-black">
-              Sign in
-            </Link>
-          </p>
         </section>
       </div>
     </main>
+  );
+}
+
+/* ─────────────────────────── Field ─────────────────────────── */
+
+function Field({
+  id, label, icon: Icon, type, autoComplete, placeholder, value, onChange, minLength, trailing,
+}: {
+  id: string;
+  label: string;
+  icon?: typeof User;
+  type: string;
+  autoComplete?: string;
+  placeholder?: string;
+  value: string;
+  onChange: (v: string) => void;
+  minLength?: number;
+  trailing?: React.ReactNode;
+}) {
+  return (
+    <label htmlFor={id} className="block">
+      <span className="mb-1.5 block text-[11.5px] font-semibold uppercase tracking-[0.16em] text-brand-900/55">
+        {label}
+      </span>
+      <span className="group relative flex items-center">
+        {Icon && (
+          <Icon className="pointer-events-none absolute left-4 h-4 w-4 text-brand-900/35 transition group-focus-within:text-mint-700" />
+        )}
+        <input
+          id={id}
+          type={type}
+          autoComplete={autoComplete}
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          minLength={minLength}
+          required
+          className={`h-12 w-full rounded-2xl border border-paper-200 bg-white text-[14px] text-brand-950 outline-none transition placeholder:text-brand-900/30 focus:border-mint-400 focus:bg-white focus:ring-4 focus:ring-mint-100 ${
+            Icon ? "pl-11" : "pl-4"
+          } ${trailing ? "pr-12" : "pr-4"}`}
+        />
+        {trailing && <span className="absolute right-3">{trailing}</span>}
+      </span>
+    </label>
+  );
+}
+
+/* ─────────────────────── Password meter ─────────────────────── */
+
+function scorePassword(pw: string): 0 | 1 | 2 | 3 | 4 {
+  if (!pw) return 0;
+  let score = 0;
+  if (pw.length >= 8) score++;
+  if (pw.length >= 12) score++;
+  if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) score++;
+  if (/\d/.test(pw) && /[^A-Za-z0-9]/.test(pw)) score++;
+  return Math.min(4, score) as 0 | 1 | 2 | 3 | 4;
+}
+
+function PasswordMeter({ strength }: { strength: 0 | 1 | 2 | 3 | 4 }) {
+  if (strength === 0) return null;
+  const labels = ["", "Weak", "Fair", "Good", "Strong"];
+  const tones = [
+    "bg-paper-200",
+    "bg-rose-400",
+    "bg-amber-400",
+    "bg-mint-400",
+    "bg-mint-600",
+  ];
+  return (
+    <div className="mt-2 flex items-center gap-2.5">
+      <div className="flex flex-1 gap-1">
+        {[1, 2, 3, 4].map((i) => (
+          <span
+            key={i}
+            className={`h-1 flex-1 rounded-full transition ${
+              i <= strength ? tones[strength] : "bg-paper-200"
+            }`}
+          />
+        ))}
+      </div>
+      <span className="text-[11.5px] font-medium text-brand-900/55">
+        {labels[strength]}
+      </span>
+    </div>
   );
 }

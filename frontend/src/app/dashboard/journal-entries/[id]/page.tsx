@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Send, CheckCircle2, XCircle, RotateCcw, Undo2,
-  Sparkles, BookOpen,
+  Sparkles, BookOpen, CalendarRange,
+  Paperclip, FileText, Trash2, Download, Upload, Loader2, Pencil, Check,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, API_BASE } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { fmt2, fmtRate, fmtDate, fmtDateTime, fmtLabel } from "@/lib/format";
 
 
@@ -22,6 +24,12 @@ import { fmt2, fmtRate, fmtDate, fmtDateTime, fmtLabel } from "@/lib/format";
  *   reversed    → (no actions)
  */
 
+
+interface DimensionChip {
+  type: string;   // "BANK" / "PORT" / "CP" / "RP" / "INST" / "CUST" / …
+  value: string;  // raw code or fk id
+  label: string;  // human label (master short_name when FK)
+}
 
 interface Line {
   id: number;
@@ -44,6 +52,9 @@ interface Line {
   dimension_strategy_code: string;
   dimension_asset_class_code: string;
   dimension_maturity_code: string;
+  /** Backend-rendered list of every dimension populated on this line.
+   * Drives the chip strip below the line's description. */
+  dimensions_display?: DimensionChip[];
   line_order: number;
 }
 
@@ -73,6 +84,8 @@ interface AIMetadata {
   suggested_account_reasoning: string | null;
   accounting_standard_reasoning: AIStandardReasoning | null;
   entity_accounting_standard: string | null;
+  service_period_start: string | null;
+  service_period_end: string | null;
   warnings: string[];
 }
 
@@ -86,7 +99,9 @@ interface JE {
   source_type: string;
   source_ref: string;
   memo: string;
+  explanation: string;
   reference: string;
+  document_count: number;
   currency: string;
   total_debit_functional: string;
   total_credit_functional: string;
@@ -338,6 +353,21 @@ export default function JEDetailPage() {
               </tfoot>
             </table>
           </div>
+
+          {/* Explanation — long-form rationale for the entry */}
+          <ExplanationCard
+            jeId={je.id}
+            initialText={je.explanation}
+            locked={je.status === "posted" || je.status === "reversed"}
+            onSaved={(updated) => setJe((prev) => prev ? { ...prev, explanation: updated.explanation, status: updated.status } : prev)}
+          />
+
+          {/* Source documents — bills, receipts, contracts, screenshots */}
+          <AttachmentsCard
+            jeId={je.id}
+            locked={je.status === "posted" || je.status === "reversed"}
+            onCountChange={(n) => setJe((prev) => prev ? { ...prev, document_count: n } : prev)}
+          />
         </div>
 
         {/* Sidebar: metadata + approval history */}
@@ -427,6 +457,14 @@ function AIReasoningPanel({ meta }: { meta: AIMetadata }) {
       </div>
 
       <div className="px-4 py-3 space-y-3">
+        {(meta.service_period_start || meta.service_period_end) && (
+          <ServicePeriodCallout
+            start={meta.service_period_start}
+            end={meta.service_period_end}
+            standardLabel={standardLabel}
+          />
+        )}
+
         {meta.suggested_account_reasoning && (
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
@@ -470,6 +508,66 @@ function AIReasoningPanel({ meta }: { meta: AIMetadata }) {
   );
 }
 
+function ServicePeriodCallout({
+  start, end, standardLabel,
+}: { start: string | null; end: string | null; standardLabel: string }) {
+  // Count distinct calendar months covered, inclusive on both ends. Mirrors
+  // the multi-period flag computed in beakon_core/services/ai_drafting.py.
+  let months: number | null = null;
+  if (start && end) {
+    const s = new Date(start);
+    const e = new Date(end);
+    if (!Number.isNaN(s.getTime()) && !Number.isNaN(e.getTime()) && e >= s) {
+      months = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth()) + 1;
+    }
+  }
+  const isMultiPeriod = months !== null && months > 1;
+
+  return (
+    <div
+      className={cn(
+        "rounded-lg p-2.5 ring-1 ring-inset",
+        isMultiPeriod
+          ? "bg-amber-50/70 ring-amber-200"
+          : "bg-canvas-50 ring-canvas-200",
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <CalendarRange className={cn(
+          "w-3.5 h-3.5",
+          isMultiPeriod ? "text-amber-700" : "text-gray-500",
+        )} />
+        <span className={cn(
+          "text-[10px] font-semibold uppercase tracking-wider",
+          isMultiPeriod ? "text-amber-800" : "text-gray-500",
+        )}>
+          Service period
+        </span>
+        <span className="text-xs text-gray-700">
+          {start && end ? `${start} → ${end}` : start || end}
+          {months !== null && (
+            <span className={cn(
+              "ml-2 text-[10px] font-semibold",
+              isMultiPeriod ? "text-amber-700" : "text-gray-400",
+            )}>
+              {months} {months === 1 ? "month" : "months"}
+            </span>
+          )}
+        </span>
+      </div>
+      {isMultiPeriod && (
+        <p className="text-[11px] text-amber-800 mt-1.5 leading-relaxed">
+          This invoice covers more than one accounting period. Under {standardLabel} this
+          typically requires period allocation: recognise the portion in the current
+          period as expense, defer the rest as a prepaid asset, and amortise over the
+          remaining months. The AI proposed a single-period booking — review and adjust
+          before posting.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Row({ k, v }: { k: string; v: string }) {
   return (
     <div className="flex justify-between gap-2">
@@ -479,31 +577,368 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-function DimensionBadges({ line }: { line: Line }) {
-  const tags = [
-    line.dimension_bank_code ? `BANK:${line.dimension_bank_code}` : "",
-    line.dimension_custodian_code ? `CUST:${line.dimension_custodian_code}` : "",
-    line.dimension_portfolio_code ? `PORT:${line.dimension_portfolio_code}` : "",
-    line.dimension_instrument_code ? `INST:${line.dimension_instrument_code}` : "",
-    line.dimension_strategy_code ? `STR:${line.dimension_strategy_code}` : "",
-    line.dimension_asset_class_code ? `ACL:${line.dimension_asset_class_code}` : "",
-    line.dimension_maturity_code ? `MAT:${line.dimension_maturity_code}` : "",
-  ].filter(Boolean);
+/* Color tone per dimension type — picked so the same dimension always
+ * shows the same colour across the dashboard (e.g. PORT is always sky,
+ * CP always amber). Anything not in the map gets the neutral fallback. */
+const DIM_TONE: Record<string, string> = {
+  // Money / where it lives
+  BANK: "bg-emerald-50 text-emerald-700 ring-emerald-100",
+  CUST: "bg-teal-50 text-teal-700 ring-teal-100",
+  // Investment axes
+  PORT: "bg-sky-50 text-sky-700 ring-sky-100",
+  INST: "bg-indigo-50 text-indigo-700 ring-indigo-100",
+  STR:  "bg-violet-50 text-violet-700 ring-violet-100",
+  ACL:  "bg-purple-50 text-purple-700 ring-purple-100",
+  MAT:  "bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-100",
+  TLOT: "bg-pink-50 text-pink-700 ring-pink-100",
+  // People / counterparties
+  CP:   "bg-amber-50 text-amber-700 ring-amber-100",
+  RP:   "bg-rose-50 text-rose-700 ring-rose-100",
+  FAM:  "bg-pink-50 text-pink-700 ring-pink-100",
+  ENT:  "bg-brand-50 text-brand-700 ring-brand-100",
+  // Holdings
+  LOAN: "bg-orange-50 text-orange-700 ring-orange-100",
+  PROP: "bg-yellow-50 text-yellow-800 ring-yellow-100",
+  POL:  "bg-red-50 text-red-700 ring-red-100",
+  PEN:  "bg-cyan-50 text-cyan-700 ring-cyan-100",
+  COM:  "bg-blue-50 text-blue-700 ring-blue-100",
+  // Other
+  TRF:  "bg-gray-100 text-gray-700 ring-gray-200",
+  JUR:  "bg-gray-100 text-gray-700 ring-gray-200",
+  WAL:  "bg-gray-100 text-gray-700 ring-gray-200",
+  RCAT: "bg-gray-100 text-gray-700 ring-gray-200",
+  RST:  "bg-gray-100 text-gray-700 ring-gray-200",
+};
+const DIM_TONE_DEFAULT = "bg-canvas-50 text-gray-600 ring-canvas-200";
 
-  if (tags.length === 0) {
+function DimensionBadges({ line }: { line: Line }) {
+  // Prefer the backend-rendered list (covers all 20+ dimensions, with
+  // human labels for FK-backed types). Fall back to the legacy 7 Tier-1
+  // string codes if an older serializer didn't include it.
+  const chips: DimensionChip[] = (line.dimensions_display && line.dimensions_display.length)
+    ? line.dimensions_display
+    : ([
+        line.dimension_bank_code       && { type: "BANK", value: line.dimension_bank_code,       label: line.dimension_bank_code },
+        line.dimension_custodian_code  && { type: "CUST", value: line.dimension_custodian_code,  label: line.dimension_custodian_code },
+        line.dimension_portfolio_code  && { type: "PORT", value: line.dimension_portfolio_code,  label: line.dimension_portfolio_code },
+        line.dimension_instrument_code && { type: "INST", value: line.dimension_instrument_code, label: line.dimension_instrument_code },
+        line.dimension_strategy_code   && { type: "STR",  value: line.dimension_strategy_code,   label: line.dimension_strategy_code },
+        line.dimension_asset_class_code&& { type: "ACL",  value: line.dimension_asset_class_code,label: line.dimension_asset_class_code },
+        line.dimension_maturity_code   && { type: "MAT",  value: line.dimension_maturity_code,   label: line.dimension_maturity_code },
+      ].filter(Boolean) as DimensionChip[]);
+
+  if (chips.length === 0) {
     return <span className="text-xs text-gray-300">—</span>;
   }
 
   return (
-    <div className="flex max-w-[220px] flex-wrap gap-1">
-      {tags.map((tag) => (
-        <span
-          key={tag}
-          className="rounded-full border border-canvas-200 bg-canvas-50 px-2 py-0.5 text-[10px] font-medium text-gray-600"
-        >
-          {tag}
-        </span>
-      ))}
+    <div className="flex max-w-[260px] flex-wrap gap-1">
+      {chips.map((c, i) => {
+        const tone = DIM_TONE[c.type] ?? DIM_TONE_DEFAULT;
+        return (
+          <span
+            key={`${c.type}-${c.value}-${i}`}
+            title={`${c.type} = ${c.label}${c.label !== c.value ? ` (${c.value})` : ""}`}
+            className={`inline-flex items-center gap-1 rounded-full ring-1 ring-inset px-1.5 py-0.5 text-[10px] font-medium ${tone}`}
+          >
+            <span className="font-semibold">{c.type}</span>
+            <span className="text-gray-300">·</span>
+            <span className="font-mono">{c.label}</span>
+          </span>
+        );
+      })}
     </div>
   );
+}
+
+
+/* ── Explanation editor ───────────────────────────────────────────────
+ * Long-form rationale for why the entry exists and why each side was
+ * debited or credited. Editable while the JE is mutable; locks once
+ * posted / reversed (audit trail must preserve what backed the posting).
+ */
+function ExplanationCard({
+  jeId, initialText, locked, onSaved,
+}: {
+  jeId: number;
+  initialText: string;
+  locked: boolean;
+  onSaved: (updated: { explanation: string; status: string }) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(initialText || "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => { setText(initialText || ""); }, [initialText]);
+
+  const save = async () => {
+    setSaving(true); setErr(null);
+    try {
+      const updated = await api.patch<{ explanation: string; status: string }>(
+        `/beakon/journal-entries/${jeId}/explanation/`,
+        { explanation: text },
+      );
+      onSaved(updated);
+      setEditing(false);
+    } catch (e: any) {
+      setErr(e?.error?.message || e?.detail || "Failed to save explanation");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const cancel = () => {
+    setText(initialText || "");
+    setEditing(false);
+    setErr(null);
+  };
+
+  return (
+    <div className="card p-5 mt-4">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Explanation</h3>
+          <p className="text-[11px] text-gray-500">
+            Why this entry exists and why each side was debited or credited.
+            Visible to auditors.
+          </p>
+        </div>
+        {!locked && !editing && (
+          <button
+            onClick={() => setEditing(true)}
+            className="text-xs text-gray-600 hover:text-gray-900 inline-flex items-center gap-1"
+          >
+            <Pencil className="w-3 h-3" /> {initialText ? "Edit" : "Add"}
+          </button>
+        )}
+        {locked && (
+          <span className="text-[10px] text-gray-500 uppercase tracking-wider">
+            Locked
+          </span>
+        )}
+      </div>
+      {editing ? (
+        <div className="space-y-2">
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={5}
+            placeholder="e.g. We debited Office Rent because the WeWork invoice covered April. Credited Operating Bank because the wire cleared on Apr 30. Booked under operating expenses (not prepaid) since the service period is fully consumed."
+            className="input w-full text-sm font-mono"
+            disabled={saving}
+            autoFocus
+          />
+          {err && <p className="text-xs text-red-700">{err}</p>}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button" onClick={cancel}
+              className="btn-secondary text-xs"
+              disabled={saving}
+            >
+              Cancel
+            </button>
+            <button
+              type="button" onClick={save}
+              className="btn-primary text-xs inline-flex items-center gap-1"
+              disabled={saving}
+            >
+              {saving
+                ? <><Loader2 className="w-3 h-3 animate-spin" /> Saving…</>
+                : <><Check className="w-3 h-3" /> Save</>}
+            </button>
+          </div>
+        </div>
+      ) : initialText ? (
+        <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+          {initialText}
+        </p>
+      ) : (
+        <p className="text-sm text-gray-400 italic">
+          {locked
+            ? "No explanation was recorded for this entry."
+            : "Click Add to record why this entry exists."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+
+/* ── Attachments card ─────────────────────────────────────────────────
+ * Source documents (bills, receipts, contracts, screenshots) attached to
+ * this JE. Uses the SourceDocument REST surface; lists non-deleted only.
+ * Soft-delete blocked once the JE is posted/reversed by the kernel — UI
+ * mirrors that by hiding the trash button.
+ */
+interface JEDocument {
+  id: number;
+  original_filename: string;
+  content_type: string;
+  size_bytes: number;
+  description: string;
+  uploaded_by_email: string | null;
+  uploaded_at: string;
+}
+
+function AttachmentsCard({
+  jeId, locked, onCountChange,
+}: {
+  jeId: number;
+  locked: boolean;
+  onCountChange: (n: number) => void;
+}) {
+  const [docs, setDocs] = useState<JEDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const reload = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const d = await api.get<JEDocument[]>(`/beakon/journal-entries/${jeId}/documents/`);
+      setDocs(d);
+      onCountChange(d.length);
+    } catch (e: any) {
+      setErr(e?.error?.message || e?.detail || "Failed to load attachments");
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { void reload(); /* eslint-disable-next-line */ }, [jeId]);
+
+  const upload = async (file: File) => {
+    setUploading(true); setErr(null);
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const token = localStorage.getItem("access_token");
+      const orgId = localStorage.getItem("organization_id");
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      if (orgId) headers["X-Organization-ID"] = orgId;
+      const resp = await fetch(
+        `${API_BASE}/beakon/journal-entries/${jeId}/documents/`,
+        { method: "POST", headers, body: fd },
+      );
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new Error(body?.detail || body?.error?.message || `HTTP ${resp.status}`);
+      }
+      await reload();
+    } catch (e: any) {
+      setErr(e?.message || "Upload failed");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const remove = async (docId: number) => {
+    if (!confirm("Remove this attachment? (soft-delete only — file stays in the audit trail)")) return;
+    setErr(null);
+    try {
+      await api.delete(`/beakon/documents/${docId}/`);
+      await reload();
+    } catch (e: any) {
+      setErr(e?.error?.message || e?.detail || "Failed to remove");
+    }
+  };
+
+  const downloadUrl = (id: number) => `${API_BASE}/beakon/documents/${id}/`;
+
+  return (
+    <div className="card p-5 mt-4">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
+            <Paperclip className="w-4 h-4 text-gray-500" /> Attachments
+            {docs.length > 0 && (
+              <span className="text-[11px] font-normal text-gray-500">
+                ({docs.length})
+              </span>
+            )}
+          </h3>
+          <p className="text-[11px] text-gray-500">
+            Source documents — bills, receipts, contracts, statements. PDF, image, CSV, email up to 25 MB.
+          </p>
+        </div>
+        {/* Upload is always allowed — auditors often add supporting docs after
+         * a JE posts (bank confirmation arrives late, signed contract scanned
+         * later, etc.). The kernel only blocks soft-delete on posted/reversed. */}
+        <input
+          ref={fileRef}
+          type="file"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void upload(f);
+          }}
+        />
+        <button
+          onClick={() => fileRef.current?.click()}
+          disabled={uploading}
+          className="btn-secondary text-xs inline-flex items-center gap-1"
+        >
+          {uploading
+            ? <><Loader2 className="w-3 h-3 animate-spin" /> Uploading…</>
+            : <><Upload className="w-3 h-3" /> Upload</>}
+        </button>
+      </div>
+      {err && <p className="text-xs text-red-700 mb-2">{err}</p>}
+      {loading ? (
+        <p className="text-xs text-gray-400">Loading…</p>
+      ) : docs.length === 0 ? (
+        <p className="text-sm text-gray-400 italic">
+          No attachments yet. Click <span className="font-medium text-gray-600">Upload</span>{" "}
+          to attach a bill, receipt, contract, or any supporting document for this entry.
+        </p>
+      ) : (
+        <ul className="divide-y divide-canvas-100">
+          {docs.map((d) => (
+            <li key={d.id} className="py-2 flex items-center gap-3">
+              <FileText className="w-4 h-4 text-gray-400 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <a
+                  href={downloadUrl(d.id)}
+                  target="_blank" rel="noreferrer"
+                  className="text-sm text-gray-900 hover:underline truncate block"
+                  title={d.original_filename}
+                >
+                  {d.original_filename}
+                </a>
+                <div className="text-[11px] text-gray-500">
+                  {fmtSize(d.size_bytes)} · {d.uploaded_by_email || "system"} · {fmtDateTime(d.uploaded_at)}
+                </div>
+              </div>
+              <a
+                href={downloadUrl(d.id)}
+                target="_blank" rel="noreferrer"
+                className="p-1 text-gray-500 hover:text-gray-900"
+                title="Download"
+              >
+                <Download className="w-3.5 h-3.5" />
+              </a>
+              {!locked && (
+                <button
+                  onClick={() => void remove(d.id)}
+                  className="p-1 text-gray-400 hover:text-red-600"
+                  title="Remove (soft-delete)"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function fmtSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }

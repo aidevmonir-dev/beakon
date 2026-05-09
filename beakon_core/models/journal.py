@@ -87,7 +87,18 @@ class JournalEntry(models.Model):
     )
     date = models.DateField()
     reference = models.CharField(max_length=255, blank=True)
-    memo = models.TextField(blank=True)
+    memo = models.TextField(
+        blank=True,
+        help_text="One-line subject — auto-set by AI/OCR for bills + invoices.",
+    )
+    explanation = models.TextField(
+        blank=True,
+        help_text=(
+            "Long-form reasoning: WHY this entry exists, WHY each side was "
+            "debited or credited, and any judgement an auditor would want to "
+            "see. Distinct from `memo` (which is a one-line subject)."
+        ),
+    )
 
     status = models.CharField(
         max_length=20, choices=c.JE_STATUS_CHOICES, default=c.JE_DRAFT
@@ -254,10 +265,21 @@ class JournalLine(models.Model):
         null=True, blank=True,
         related_name="rebillable_lines",
     )
+    rebilled_invoice_line = models.ForeignKey(
+        "beakon_core.InvoiceLine", on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="rebilled_journal_lines",
+        help_text="Set when DisbursementService bills this rebillable cost to a "
+                  "client. NULL means the cost is still pending recovery. "
+                  "Prevents double-billing.",
+    )
 
-    # Workbook-driven dimensional tags (Thomas's 2nd document). These are
-    # stored as stable codes for now; later phases can replace or supplement
-    # them with FKs into dedicated master tables and validation rules.
+    # Workbook-driven dimensional tags (Thomas's CoA workbook).
+    #
+    # Tier-1 dimensions (existing — code-only, FK promotion deferred until we
+    # backfill historical lines). The string codes are kept for round-trip;
+    # parallel FK columns will be added in a follow-up migration once we're
+    # ready to backfill posted lines.
     dimension_bank_code = models.CharField(max_length=50, blank=True)
     dimension_custodian_code = models.CharField(max_length=50, blank=True)
     dimension_portfolio_code = models.CharField(max_length=50, blank=True)
@@ -265,6 +287,63 @@ class JournalLine(models.Model):
     dimension_strategy_code = models.CharField(max_length=50, blank=True)
     dimension_asset_class_code = models.CharField(max_length=50, blank=True)
     dimension_maturity_code = models.CharField(max_length=50, blank=True)
+
+    # Tier-2 dimensions (new — added during the FK promotion pass). These
+    # close the 13-of-21 dimension gap from the CoA-workbook audit. FK where
+    # a master exists, code-only where the dimension is just a controlled-list
+    # value or where no master is built yet.
+    #
+    # FK-backed (master exists):
+    dimension_tax_lot = models.ForeignKey(
+        "beakon_core.TaxLot", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="journal_lines",
+    )
+    dimension_loan = models.ForeignKey(
+        "beakon_core.Loan", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="journal_lines",
+    )
+    dimension_related_party = models.ForeignKey(
+        "beakon_core.RelatedParty", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="journal_lines_as_party",
+    )
+    dimension_counterparty = models.ForeignKey(
+        "beakon_core.Counterparty", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="journal_lines",
+    )
+    dimension_property = models.ForeignKey(
+        "beakon_core.Property", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="journal_lines",
+    )
+    dimension_policy = models.ForeignKey(
+        "beakon_core.Policy", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="journal_lines",
+    )
+    dimension_pension = models.ForeignKey(
+        "beakon_core.Pension", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="journal_lines",
+    )
+    dimension_commitment = models.ForeignKey(
+        "beakon_core.Commitment", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="journal_lines",
+        help_text="FK promotion of dimension_commitment_code. Either being set "
+                  "satisfies the COM dimension requirement.",
+    )
+    # FAM is a subset of related parties (family members). We store it as a
+    # second FK to RelatedParty so a posting can carry both "the related party
+    # this affects" and "the family member it belongs to" — useful for school
+    # fees, allowance, family expense allocation.
+    dimension_family_member = models.ForeignKey(
+        "beakon_core.RelatedParty", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="journal_lines_as_family_member",
+    )
+
+    # Code-only (controlled-list values — no dedicated master needed):
+    dimension_transfer_type_code = models.CharField(max_length=40, blank=True)
+    dimension_jurisdiction_code = models.CharField(max_length=40, blank=True)
+    dimension_commitment_code = models.CharField(max_length=40, blank=True)
+    dimension_wallet_code = models.CharField(max_length=80, blank=True)
+    dimension_report_category_code = models.CharField(max_length=40, blank=True)
+    dimension_restriction_type_code = models.CharField(max_length=40, blank=True)
 
     line_order = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)

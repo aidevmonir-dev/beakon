@@ -18,8 +18,30 @@ from rest_framework.views import APIView
 
 from api.permissions import IsOrganizationMember
 from beakon_core import constants as c
+from beakon_core.exceptions import FXRateMissing
 from beakon_core.models import Account, Entity, JournalEntry, JournalLine
 from beakon_core.services import ReportsService
+
+
+def _fx_rate_missing_response(exc: FXRateMissing) -> Response:
+    """Surface a missing-rate failure as a 422 with a helpful message
+    instead of a 500. Operators see the offending pair + a hint on how
+    to fix it (Add FX Rates page).
+    """
+    return Response(
+        {"error": {
+            "code": "FX_RATE_MISSING",
+            "message": (
+                f"{exc}. Add the missing rate at /dashboard/fx-rates "
+                "or pick a reporting currency that already has rates loaded."
+            ),
+            "details": {"hint": "Reports translate every line into the "
+                                  "reporting currency. Without an FX rate "
+                                  "for at least one currency pair, totals "
+                                  "can't be computed."},
+        }},
+        status=http.HTTP_422_UNPROCESSABLE_ENTITY,
+    )
 
 
 def _parse_date(s):
@@ -106,6 +128,8 @@ class TrialBalanceView(_ReportBase):
                 as_of=as_of, reporting_currency=reporting_currency,
                 dimension_filter=df,
             )
+        except FXRateMissing as e:
+            return _fx_rate_missing_response(e)
         except ValueError as e:
             return _bad_request(str(e))
         return Response(data)
@@ -131,6 +155,8 @@ class ProfitLossView(_ReportBase):
                 reporting_currency=reporting_currency,
                 dimension_filter=df,
             )
+        except FXRateMissing as e:
+            return _fx_rate_missing_response(e)
         except ValueError as e:
             return _bad_request(str(e))
         return Response(data)
@@ -154,6 +180,8 @@ class BalanceSheetView(_ReportBase):
                 as_of=as_of, reporting_currency=reporting_currency,
                 dimension_filter=df,
             )
+        except FXRateMissing as e:
+            return _fx_rate_missing_response(e)
         except ValueError as e:
             return _bad_request(str(e))
         return Response(data)
@@ -172,11 +200,14 @@ class CashFlowView(_ReportBase):
                 status=http.HTTP_400_BAD_REQUEST,
             )
         reporting_currency = request.query_params.get("reporting_currency") or None
-        data = ReportsService.cash_flow_statement(
-            entity=entity, organization=organization,
-            date_from=date_from, date_to=date_to,
-            reporting_currency=reporting_currency,
-        )
+        try:
+            data = ReportsService.cash_flow_statement(
+                entity=entity, organization=organization,
+                date_from=date_from, date_to=date_to,
+                reporting_currency=reporting_currency,
+            )
+        except FXRateMissing as e:
+            return _fx_rate_missing_response(e)
         return Response(data)
 
 
@@ -187,10 +218,13 @@ class APAgingView(_ReportBase):
             return err
         as_of = _parse_date(request.query_params.get("as_of")) or dt_date.today()
         reporting_currency = request.query_params.get("reporting_currency") or None
-        data = ReportsService.ap_aging(
-            entity=entity, organization=organization,
-            as_of=as_of, reporting_currency=reporting_currency,
-        )
+        try:
+            data = ReportsService.ap_aging(
+                entity=entity, organization=organization,
+                as_of=as_of, reporting_currency=reporting_currency,
+            )
+        except FXRateMissing as e:
+            return _fx_rate_missing_response(e)
         return Response(data)
 
 
@@ -201,10 +235,13 @@ class ARAgingView(_ReportBase):
             return err
         as_of = _parse_date(request.query_params.get("as_of")) or dt_date.today()
         reporting_currency = request.query_params.get("reporting_currency") or None
-        data = ReportsService.ar_aging(
-            entity=entity, organization=organization,
-            as_of=as_of, reporting_currency=reporting_currency,
-        )
+        try:
+            data = ReportsService.ar_aging(
+                entity=entity, organization=organization,
+                as_of=as_of, reporting_currency=reporting_currency,
+            )
+        except FXRateMissing as e:
+            return _fx_rate_missing_response(e)
         return Response(data)
 
 
@@ -281,6 +318,8 @@ class AccountLedgerView(APIView):
                 only_posted=request.query_params.get("only_posted", "true").lower() != "false",
                 dimension_filter=df,
             )
+        except FXRateMissing as e:
+            return _fx_rate_missing_response(e)
         except ValueError as e:
             return _bad_request(str(e))
         return Response(data)
@@ -310,6 +349,8 @@ class EntryDetailView(APIView):
             return df_err
         try:
             data = ReportsService.entry_detail(entry=entry, dimension_filter=df)
+        except FXRateMissing as e:
+            return _fx_rate_missing_response(e)
         except ValueError as e:
             return _bad_request(str(e))
         return Response(data)

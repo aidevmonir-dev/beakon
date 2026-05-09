@@ -18,7 +18,7 @@ from django.utils import timezone
 from .. import constants as c
 from ..exceptions import InvalidTransition, ValidationError
 from ..models import (
-    Account, Customer, Entity, Invoice, InvoiceLine, JournalEntry,
+    Account, Counterparty, Customer, Entity, Invoice, InvoiceLine, JournalEntry,
 )
 from ..models.ar import (
     INVOICE_CANCELLED, INVOICE_DRAFT, INVOICE_EDITABLE, INVOICE_ISSUED,
@@ -49,6 +49,7 @@ class InvoiceService:
         tax_amount: Optional[Decimal] = None,
         total: Optional[Decimal] = None,
         description: str = "",
+        explanation: str = "",
         user=None,
     ) -> Invoice:
         if customer.organization_id != organization.id:
@@ -70,8 +71,18 @@ class InvoiceService:
             (Decimal(str(ln.get("amount") or 0)) for ln in lines),
             Decimal("0"),
         )
+        line_tax_sum = sum(
+            (
+                Decimal(str(ln["tax_amount"])) if ln.get("tax_amount") is not None
+                else _derive_tax_amount(ln.get("tax_code_id"), Decimal(str(ln.get("amount") or 0)))
+                for ln in lines
+            ),
+            Decimal("0"),
+        )
         subtotal = Decimal(subtotal) if subtotal is not None else line_sum
-        tax_amount = Decimal(tax_amount) if tax_amount is not None else Decimal("0")
+        tax_amount = (
+            Decimal(tax_amount) if tax_amount is not None else line_tax_sum
+        )
         total = Decimal(total) if total is not None else (subtotal + tax_amount)
 
         invoice = Invoice.objects.create(
@@ -83,6 +94,7 @@ class InvoiceService:
             subtotal=subtotal, tax_amount=tax_amount, total=total,
             status=INVOICE_DRAFT,
             description=description,
+            explanation=explanation,
             created_by=user,
         )
         for i, ln in enumerate(lines):
@@ -165,28 +177,68 @@ class InvoiceService:
                 f"Entity {invoice.entity.code} has no accounts_receivable account.",
                 code="AR010",
             )
+        # The customer IS the counterparty on an invoice. Tag every JE line
+        # with its FK so CP dimension validation passes automatically.
+        cp_id = _resolve_counterparty_for_customer(invoice.customer, invoice.organization_id)
 
         je_lines = [{
             "account_id": ar_account.id,
             "debit": invoice.total,
             "currency": invoice.currency,
             "description": f"AR from {invoice.customer.code} {invoice.reference}",
+            "dimension_counterparty_id": cp_id,
         }]
-        for ln in invoice.lines.select_related("revenue_account").order_by("line_order"):
+        line_tax_by_output_account: dict[int, Decimal] = {}
+        line_level_tax_total: Decimal = Decimal("0")
+
+        for ln in (
+            invoice.lines
+            .select_related("revenue_account", "tax_code", "tax_code__output_account")
+            .order_by("line_order")
+        ):
             je_lines.append({
                 "account_id": ln.revenue_account_id,
                 "credit": ln.amount,
                 "currency": invoice.currency,
                 "description": f"{invoice.customer.code} {invoice.reference}: {ln.description}",
+                "dimension_counterparty_id": cp_id,
             })
-        # v1 lumps tax into the first line's revenue account; v2 will split
-        # to a tax_payable liability when the tax engine ships.
-        if invoice.tax_amount > 0:
+            if ln.tax_amount and ln.tax_amount > 0:
+                line_level_tax_total += ln.tax_amount
+                if ln.tax_code and ln.tax_code.output_account_id:
+                    line_tax_by_output_account.setdefault(
+                        ln.tax_code.output_account_id, Decimal("0"),
+                    )
+                    line_tax_by_output_account[ln.tax_code.output_account_id] += ln.tax_amount
+                else:
+                    # No output_account configured — fall back to the line's own
+                    # revenue account (caller hasn't set up the VAT GL yet).
+                    je_lines.append({
+                        "account_id": ln.revenue_account_id,
+                        "credit": ln.tax_amount,
+                        "currency": invoice.currency,
+                        "description": f"{invoice.customer.code} {invoice.reference}: VAT",
+                        "dimension_counterparty_id": cp_id,
+                    })
+
+        # Per-tax-code Output VAT lines (the proper liability).
+        for output_acct_id, total_for_code in line_tax_by_output_account.items():
+            je_lines.append({
+                "account_id": output_acct_id,
+                "credit": total_for_code,
+                "currency": invoice.currency,
+                "description": f"{invoice.customer.code} {invoice.reference}: Output VAT",
+                "dimension_counterparty_id": cp_id,
+            })
+
+        # Legacy fallback: hand-entered Invoice.tax_amount with no per-line tax.
+        if invoice.tax_amount > 0 and line_level_tax_total == 0:
             je_lines.append({
                 "account_id": invoice.lines.first().revenue_account_id,
                 "credit": invoice.tax_amount,
                 "currency": invoice.currency,
                 "description": f"{invoice.customer.code} {invoice.reference}: tax",
+                "dimension_counterparty_id": cp_id,
             })
 
         je = JournalService.create_draft(
@@ -197,6 +249,7 @@ class InvoiceService:
             memo=f"Invoice {invoice.reference} · {invoice.customer.name}" + (
                 f" · {invoice.description[:100]}" if invoice.description else ""
             ),
+            explanation=invoice.explanation,
             reference=invoice.invoice_number or invoice.reference,
             source_type=c.SOURCE_INVOICE,
             source_id=invoice.id,
@@ -208,6 +261,12 @@ class InvoiceService:
         JournalService.submit_for_approval(je, user=None)
         JournalService.approve(je, user=user)
         JournalService.post(je, user=user)
+
+        # Auto-transfer the invoice's attachments (uploaded scan etc.) to
+        # the JE. Same SourceDocument rows; ``invoice`` FK stays so the
+        # source can be navigated from either side.
+        from .documents import SourceDocumentService
+        SourceDocumentService.transfer_invoice_documents_to_je(invoice, je)
 
         invoice.status = INVOICE_ISSUED
         invoice.issued_by = user
@@ -239,15 +298,18 @@ class InvoiceService:
                 f"Entity {invoice.entity.code} has no accounts_receivable account.",
                 code="AR010",
             )
+        cp_id = _resolve_counterparty_for_customer(invoice.customer, invoice.organization_id)
 
         je_lines = [
             {"account_id": bank_account.id, "debit": invoice.total,
              "currency": invoice.currency,
              "description": f"Receipt from {invoice.customer.code} {invoice.reference}"
-                             + (f" ref {reference}" if reference else "")},
+                             + (f" ref {reference}" if reference else ""),
+             "dimension_counterparty_id": cp_id},
             {"account_id": ar_account.id, "credit": invoice.total,
              "currency": invoice.currency,
-             "description": f"Settle {invoice.customer.code} {invoice.reference}"},
+             "description": f"Settle {invoice.customer.code} {invoice.reference}",
+             "dimension_counterparty_id": cp_id},
         ]
         je = JournalService.create_draft(
             organization=invoice.organization, entity=invoice.entity,
@@ -334,10 +396,37 @@ def _resolve_ar_account(entity: Entity) -> Optional[Account]:
     )
 
 
+def _resolve_counterparty_for_customer(customer: Customer, organization_id) -> Optional[int]:
+    """Return Counterparty.id whose ``counterparty_id`` matches ``customer.code``.
+
+    Mirrors ``_resolve_counterparty_for_vendor`` in services/bills.py — on an
+    invoice the customer IS the counterparty for CP-dimension purposes.
+    """
+    if not customer or not customer.code:
+        return None
+    cp = (
+        Counterparty.objects
+        .filter(
+            organization_id=organization_id,
+            counterparty_id=customer.code,
+            active_flag=True,
+        )
+        .only("id")
+        .first()
+    )
+    return cp.id if cp else None
+
+
 def _create_line(invoice: Invoice, spec: dict, idx: int) -> InvoiceLine:
     amount = Decimal(str(spec.get("amount") or 0))
     qty = Decimal(str(spec.get("quantity") or 1))
     unit_price = Decimal(str(spec.get("unit_price") or (amount / qty if qty else 0)))
+    tax_code_id = spec.get("tax_code_id")
+    tax_amount_raw = spec.get("tax_amount")
+    tax_amount = (
+        Decimal(str(tax_amount_raw)) if tax_amount_raw is not None
+        else _derive_tax_amount(tax_code_id, amount)
+    )
     return InvoiceLine.objects.create(
         invoice=invoice,
         revenue_account_id=spec["revenue_account_id"],
@@ -345,5 +434,19 @@ def _create_line(invoice: Invoice, spec: dict, idx: int) -> InvoiceLine:
         quantity=qty,
         unit_price=unit_price,
         amount=amount,
+        tax_code_id=tax_code_id,
+        tax_amount=tax_amount,
         line_order=spec.get("line_order", idx),
     )
+
+
+def _derive_tax_amount(tax_code_id, base: Decimal) -> Decimal:
+    """Compute tax from rate × base when caller didn't supply tax_amount."""
+    if not tax_code_id:
+        return Decimal("0")
+    from ..models import TaxCode
+    try:
+        tc = TaxCode.objects.only("rate").get(id=tax_code_id)
+    except TaxCode.DoesNotExist:
+        return Decimal("0")
+    return (Decimal(base) * tc.rate / Decimal("100")).quantize(Decimal("0.01"))

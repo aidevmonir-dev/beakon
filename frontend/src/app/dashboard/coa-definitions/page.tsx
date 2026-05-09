@@ -66,7 +66,7 @@ export default function CoADefinitionsPage() {
     try {
       const data = await api.get<CoADefinition[] | { results?: CoADefinition[] }>(
         "/beakon/coa-definitions/",
-        { ordering: "coa_type,version_no,coa_id" },
+        { ordering: "coa_type,version_no,coa_id", page_size: "1000" },
       );
       setItems(asList(data));
     } catch {

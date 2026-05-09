@@ -32,6 +32,7 @@ export default function AskBeakon() {
   const [streaming, setStreaming] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [backend, setBackend] = useState<{ backend: string; model: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -40,6 +41,33 @@ export default function AskBeakon() {
     if (!scrollRef.current) return;
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, streamBuf, open]);
+
+  // Listen for programmatic open events. Other pages (e.g. the recon
+  // page's "Discuss with Beakon" button) dispatch:
+  //   window.dispatchEvent(new CustomEvent("beakon:open", {
+  //     detail: { prefill: "...", autoSubmit: true }
+  //   }));
+  // The chat opens, the prefill becomes the next user message, and if
+  // autoSubmit is true it fires immediately.
+  useEffect(() => {
+    function handleOpen(e: Event) {
+      const detail = (e as CustomEvent).detail || {};
+      const text: string = detail.prefill || "";
+      const auto: boolean = !!detail.autoSubmit;
+      setOpen(true);
+      if (text) {
+        if (auto) {
+          // Defer to next tick so setOpen has applied.
+          setTimeout(() => { void submit(text); }, 0);
+        } else {
+          setPrompt(text);
+        }
+      }
+    }
+    window.addEventListener("beakon:open", handleOpen);
+    return () => window.removeEventListener("beakon:open", handleOpen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const submit = async (text: string) => {
     const question = text.trim();
@@ -95,8 +123,15 @@ export default function AskBeakon() {
             setStreamBuf(acc);
           } else if (data.type === "error") {
             throw new Error(data.message || "Ask Beakon failed");
+          } else if (data.type === "context_built") {
+            // First event of every stream — surfaces the active backend
+            // ("ollama" / "claude") + model so the panel subtitle stays
+            // honest when the env var flips.
+            if (data.backend) {
+              setBackend({ backend: data.backend, model: data.model || "" });
+            }
           }
-          // ignore: context_built, done — done is implicit when stream closes
+          // ignore: done — done is implicit when stream closes
         }
       }
 
@@ -131,7 +166,7 @@ export default function AskBeakon() {
   // ── Collapsed pill (default state) ─────────────────────────────
   if (!open) {
     return (
-      <div className="fixed bottom-6 left-0 lg:left-64 right-0 z-20 flex justify-center pointer-events-none px-4">
+      <div className="fixed bottom-20 lg:bottom-6 left-0 lg:left-64 right-0 z-20 flex justify-center pointer-events-none px-4">
         <div className="pointer-events-auto">
           <button
             type="button"
@@ -148,7 +183,7 @@ export default function AskBeakon() {
 
   // ── Expanded chat panel ────────────────────────────────────────
   return (
-    <div className="fixed bottom-4 left-0 lg:left-64 right-0 lg:right-4 top-20 md:top-24 z-40 flex justify-center pointer-events-none px-3 sm:px-4">
+    <div className="fixed bottom-20 lg:bottom-4 left-0 lg:left-64 right-0 lg:right-4 top-20 md:top-24 z-40 flex justify-center pointer-events-none px-3 sm:px-4">
       <div className="pointer-events-auto w-full max-w-[720px] flex flex-col bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-gradient-to-r from-brand-50/60 to-white">
@@ -160,7 +195,13 @@ export default function AskBeakon() {
                 <Sparkles className="w-3.5 h-3.5 text-brand-600" />
               </div>
               <div className="text-[10px] text-slate-400">
-                Local Ollama · read-only · nothing leaves your machine
+                {backend?.backend === "claude" ? (
+                  <>Anthropic Claude{backend.model ? ` (${backend.model})` : ""} · read-only · ledger snapshot sent to api.anthropic.com</>
+                ) : backend?.backend === "ollama" ? (
+                  <>Local Ollama{backend.model ? ` (${backend.model})` : ""} · read-only · nothing leaves your machine</>
+                ) : (
+                  <>Read-only · answers from posted ledger data</>
+                )}
               </div>
             </div>
           </div>

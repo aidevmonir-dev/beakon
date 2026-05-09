@@ -182,10 +182,16 @@ def _import_coa_definition(*, org, ws, target_coa_id: str, stats: dict[str, int]
         if _text(values[0]) != target_coa_id:
             continue
 
+        # Workbook 01 has Additional_Reporting_Currencies split across columns 9
+        # and 10 in the only data row (USD, EUR). Universal_Mapping_Required
+        # then sits at 11, Dimensions_Enabled at 12, Governed_Instruments_Enabled
+        # at 13, Description at 14, free-text notes spilling into 15+.
         additional = ",".join(v for v in (_text(values[9]), _text(values[10])) if v)
+        universal_mapping_required = _bool(values[11], default=False)
+        dimensions_enabled = _bool(values[12], default=False)
+        governed_instruments_enabled = _bool(values[13], default=False)
         description = _text(values[14])
-        extra_notes = " ".join(_text(v) for v in values[15:] if _text(v))
-        notes = "\n".join(part for part in (description, extra_notes) if part)
+        notes = " ".join(_text(v) for v in values[15:] if _text(v))
 
         obj, created = CoADefinition.objects.update_or_create(
             organization=org,
@@ -200,6 +206,10 @@ def _import_coa_definition(*, org, ws, target_coa_id: str, stats: dict[str, int]
                 "base_currency": _text(values[7]) or "CHF",
                 "default_reporting_currency": _text(values[8]) or "CHF",
                 "additional_reporting_currencies": additional,
+                "universal_mapping_required": universal_mapping_required,
+                "dimensions_enabled": dimensions_enabled,
+                "governed_instruments_enabled": governed_instruments_enabled,
+                "description": description,
                 "notes": notes,
             },
         )
@@ -256,6 +266,22 @@ def _import_accounts(*, org, coa, ws, target_coa_id: str, stats: dict[str, int])
                 "fx_revalue_flag": _bool(row.get("FX_Revalue_Flag"), default=False),
                 "tax_relevant_flag": _bool(row.get("Tax_Relevant_Flag"), default=False),
                 "monetary_flag": _bool(row.get("Monetary_Flag"), default=False),
+                # Governance fields promoted from JSON. Each value is filtered
+                # against a controlled vocabulary; off-vocab values fall through
+                # as blank but the raw value remains in workbook_metadata.
+                "economic_nature": _vocab_filtered(row.get("Economic_Nature"), _ECONOMIC_NATURES),
+                "client_view_category": _short_text(row.get("Client_View_Category"), max_len=60),
+                "subledger_required": _bool(row.get("Subledger_Required"), default=False),
+                "subledger_type": _vocab_filtered(row.get("Subledger_Type"), _SUBLEDGER_TYPES),
+                "valuation_basis": _vocab_filtered(row.get("Valuation_Basis"), _VALUATION_BASES),
+                "allow_foreign_currency_posting": _bool(
+                    row.get("Allow_Foreign_Currency_Posting"), default=True),
+                "fx_remeasure_flag": _vocab_filtered(
+                    row.get("FX_Remeasure_Flag"), _FX_REMEASURE_FLAGS),
+                "fx_gain_loss_bucket": _vocab_filtered(
+                    row.get("FX_Gain_Loss_Bucket"), _FX_GAIN_LOSS_BUCKETS),
+                "historical_vs_closing_rate_method": _vocab_filtered(
+                    row.get("Historical_vs_Closing_Rate_Method"), _HIST_RATE_METHODS),
                 "is_active": _bool(row.get("Active_Flag"), default=True),
                 "is_system": False,
                 "description": notes,
@@ -638,3 +664,49 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, Decimal):
         return str(value)
     return value
+
+
+# ── Controlled vocabularies for Account governance fields ────────────────
+
+_ECONOMIC_NATURES = {
+    "BALANCE_SHEET", "ACCRUAL", "PORTFOLIO_ASSET", "RELATED_PARTY_BALANCE",
+    "SETTLEMENT", "IMPAIRMENT", "CAPITAL_MOVEMENT", "CLEARING", "TAX",
+    "PREPAYMENT", "VALUATION_MOVEMENT", "PERFORMANCE",
+}
+_SUBLEDGER_TYPES = {
+    "NONE", "BANK", "INVESTMENT", "RELATED_PARTY", "COUNTERPARTY",
+    "PROPERTY", "FIXED_ASSET",
+}
+_VALUATION_BASES = {
+    "NA", "FVPL", "FAIR_VALUE", "AMORTIZED_COST", "COST", "HISTORICAL",
+}
+_FX_REMEASURE_FLAGS = {"YES", "NO", "BY_VALUATION_METHOD"}
+_FX_GAIN_LOSS_BUCKETS = {
+    "NA", "UNREALIZED_FX", "COMBINED_REALIZED_UNREALIZED", "FAIR_VALUE_FX",
+}
+_HIST_RATE_METHODS = {
+    "NA", "CLOSING", "AVERAGE", "HISTORICAL", "FAIR_VALUE",
+    "BY_VALUATION_METHOD",
+}
+
+
+def _vocab_filtered(value: Any, allowed: set[str]) -> str:
+    """Return the value only if it sits in the controlled vocabulary."""
+    if value is None:
+        return ""
+    s = str(value).strip().upper()
+    return s if s in allowed else ""
+
+
+def _short_text(value: Any, *, max_len: int) -> str:
+    """Accept a short controlled-list-style value, reject free-text noise."""
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if not s or len(s) > max_len:
+        return ""
+    if " " in s and "_" not in s:
+        return ""
+    if not all(c.isalnum() or c == "_" for c in s):
+        return ""
+    return s.upper()

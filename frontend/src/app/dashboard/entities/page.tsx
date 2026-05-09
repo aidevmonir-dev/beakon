@@ -2,29 +2,23 @@
 
 /* Entities — legal / reporting units inside an organization.
  *
- * Every journal entry binds to exactly one entity. The entity tree also
- * drives consolidated reporting and intercompany relationships, so this
- * page is core, not incidental.
+ * Every journal entry posts to exactly one entity. The entity tree drives
+ * consolidated reporting and intercompany.
  *
- * UI rule: show only what carries information.
- *   · no organization  → one strong empty state, nothing else
- *   · no entities yet   → one strong empty state, nothing else
- *   · with data         → summary cards + toolbar + table, with filter
- *                         controls hidden when the dataset makes them
- *                         meaningless (one currency, no hierarchy, etc.)
+ * Design intent: ruthless one-screen scan. Header → search + status → table.
+ * No summary cards, no chip rails. The table itself carries the whole
+ * story (type, jurisdiction, currency, accounting standard, parent/sub
+ * hint, status). Drawer is single-section, no accordion.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  Building2, Plus, X, Search, Globe, Coins, Check,
-  User, MoreHorizontal, Archive, Pencil, ExternalLink,
-  AlertCircle, Command, Info, Network, Building, ChevronDown, Briefcase,
+  Building2, Plus, X, Search, MoreHorizontal, Archive, Pencil,
+  ExternalLink, AlertCircle, Command, Network, Building, User, Briefcase,
 } from "lucide-react";
 import { api, syncOrganizationContext } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/page-header";
-import { SummaryStat } from "@/components/ui/summary-stat";
-import { FilterChip } from "@/components/ui/filter-chip";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SkeletonRow } from "@/components/ui/skeleton";
 
@@ -49,26 +43,6 @@ interface Entity {
   is_active: boolean;
 }
 
-// Per Thomas's spec: every entity declares its reporting framework. Drives
-// AI proposal conventions and the teaching note shown in the JE detail view.
-const ACCOUNTING_STANDARDS: { value: string; short: string; label: string }[] = [
-  { value: "ifrs",    short: "IFRS",    label: "IFRS — International (used outside the US)" },
-  { value: "us_gaap", short: "US GAAP", label: "US GAAP — United States" },
-  { value: "uk_gaap", short: "UK GAAP", label: "UK GAAP — FRS 102 / FRS 105" },
-  { value: "other",   short: "Other",   label: "Other / local (AI defaults to IFRS-equivalent)" },
-];
-
-function defaultStandardForCountry(cc: string): string {
-  const code = (cc || "").toUpperCase().trim();
-  if (code === "US") return "us_gaap";
-  if (code === "GB") return "uk_gaap";
-  return "ifrs";
-}
-
-function standardShort(value: string): string {
-  return ACCOUNTING_STANDARDS.find((s) => s.value === value)?.short || value || "—";
-}
-
 interface EntityTypeOption {
   value: string;
   label: string;
@@ -78,38 +52,30 @@ interface EntityTypeOption {
 }
 
 const ENTITY_TYPES: EntityTypeOption[] = [
-  { value: "company",     label: "Company",     pill: "bg-brand-50 text-brand-800 ring-brand-100" },
-  { value: "holding_company", label: "Holding Company", pill: "bg-cyan-50 text-cyan-800 ring-cyan-100" },
-  { value: "operating_company", label: "Operating Company", pill: "bg-blue-50 text-blue-800 ring-blue-100" },
-  { value: "trust",       label: "Trust",       pill: "bg-indigo-50 text-indigo-700 ring-indigo-100" },
-  { value: "foundation",  label: "Foundation",  pill: "bg-violet-50 text-violet-700 ring-violet-100" },
-  { value: "partnership", label: "Partnership", pill: "bg-amber-50 text-amber-700 ring-amber-100" },
-  { value: "fund",        label: "Fund",        pill: "bg-emerald-50 text-emerald-700 ring-emerald-100" },
-  { value: "branch",      label: "Branch",      pill: "bg-sky-50 text-sky-700 ring-sky-100" },
-  { value: "individual",  label: "Person",      pill: "bg-rose-50 text-rose-700 ring-rose-100" },
-  { value: "family",      label: "Family",      pill: "bg-orange-50 text-orange-700 ring-orange-100" },
-  { value: "spv",         label: "SPV",         pill: "bg-teal-50 text-teal-700 ring-teal-100" },
-  { value: "other",       label: "Other",       pill: "bg-gray-100 text-gray-700 ring-gray-200" },
+  { value: "company",          label: "Company",            pill: "bg-brand-50 text-brand-800 ring-brand-100" },
+  { value: "holding_company",  label: "Holding Company",    pill: "bg-cyan-50 text-cyan-800 ring-cyan-100" },
+  { value: "operating_company",label: "Operating Company",  pill: "bg-blue-50 text-blue-800 ring-blue-100" },
+  { value: "trust",            label: "Trust",              pill: "bg-indigo-50 text-indigo-700 ring-indigo-100" },
+  { value: "foundation",       label: "Foundation",         pill: "bg-violet-50 text-violet-700 ring-violet-100" },
+  { value: "partnership",      label: "Partnership",        pill: "bg-amber-50 text-amber-700 ring-amber-100" },
+  { value: "fund",             label: "Fund",               pill: "bg-emerald-50 text-emerald-700 ring-emerald-100" },
+  { value: "branch",           label: "Branch",             pill: "bg-sky-50 text-sky-700 ring-sky-100" },
+  { value: "individual",       label: "Person",             pill: "bg-rose-50 text-rose-700 ring-rose-100" },
+  { value: "family",           label: "Family",             pill: "bg-orange-50 text-orange-700 ring-orange-100" },
+  { value: "spv",              label: "SPV",                pill: "bg-teal-50 text-teal-700 ring-teal-100" },
+  { value: "other",            label: "Other",              pill: "bg-gray-100 text-gray-700 ring-gray-200" },
+];
+
+const ACCOUNTING_STANDARDS: { value: string; short: string; label: string }[] = [
+  { value: "ifrs",    short: "IFRS",    label: "IFRS — International (used outside the US)" },
+  { value: "us_gaap", short: "US GAAP", label: "US GAAP — United States" },
+  { value: "uk_gaap", short: "UK GAAP", label: "UK GAAP — FRS 102 / FRS 105" },
+  { value: "other",   short: "Other",   label: "Other / local (AI defaults to IFRS-equivalent)" },
 ];
 
 const MONTHS = [
-  "January","February","March","April","May","June",
-  "July","August","September","October","November","December",
-];
-
-// Europe-first dropdowns used by the create / edit drawer. Keeping these
-// short and meaningful beats a 200-item select — users who need something
-// exotic can type it (the input still accepts uppercase 3-letter / 2-letter
-// overrides via the Advanced section).
-const CURRENCY_OPTIONS: { value: string; label: string }[] = [
-  { value: "EUR", label: "EUR — Euro" },
-  { value: "CHF", label: "CHF — Swiss Franc" },
-  { value: "GBP", label: "GBP — British Pound" },
-  { value: "USD", label: "USD — US Dollar" },
-  { value: "CAD", label: "CAD — Canadian Dollar" },
-  { value: "AUD", label: "AUD — Australian Dollar" },
-  { value: "JPY", label: "JPY — Japanese Yen" },
-  { value: "INR", label: "INR — Indian Rupee" },
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
 ];
 
 const COUNTRY_OPTIONS: { value: string; label: string }[] = [
@@ -125,10 +91,21 @@ const COUNTRY_OPTIONS: { value: string; label: string }[] = [
   { value: "CA", label: "Canada" },
 ];
 
+const CURRENCY_OPTIONS: { value: string; label: string }[] = [
+  { value: "EUR", label: "EUR — Euro" },
+  { value: "CHF", label: "CHF — Swiss Franc" },
+  { value: "GBP", label: "GBP — British Pound" },
+  { value: "USD", label: "USD — US Dollar" },
+  { value: "CAD", label: "CAD — Canadian Dollar" },
+  { value: "AUD", label: "AUD — Australian Dollar" },
+  { value: "JPY", label: "JPY — Japanese Yen" },
+  { value: "INR", label: "INR — Indian Rupee" },
+];
+
 const COUNTRY_DATALIST_ID = "entity-country-options";
 const CURRENCY_DATALIST_ID = "entity-currency-options";
 
-type StatusFilter = "all" | "active" | "inactive";
+type StatusFilter = "active" | "all" | "archived";
 
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -149,6 +126,21 @@ function slugify(v: string) {
   return v.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
+function defaultStandardForCountry(cc: string): string {
+  const code = (cc || "").toUpperCase().trim();
+  if (code === "US") return "us_gaap";
+  if (code === "GB") return "uk_gaap";
+  return "ifrs";
+}
+
+function standardShort(value: string): string {
+  return ACCOUNTING_STANDARDS.find((s) => s.value === value)?.short || value || "—";
+}
+
+function standardLabel(value: string): string {
+  return ACCOUNTING_STANDARDS.find((s) => s.value === value)?.label || value || "—";
+}
+
 
 // ── Page ──────────────────────────────────────────────────────────────────
 
@@ -164,24 +156,16 @@ export default function EntitiesPage() {
   const [orgSwitchError, setOrgSwitchError] = useState<string | null>(null);
   const [switchingOrg, setSwitchingOrg] = useState(false);
 
-  // Filters
   const [query, setQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState<string | "all">("all");
-  const [country, setCountry] = useState<string>("all");
-  const [currency, setCurrency] = useState<string>("all");
   const [status, setStatus] = useState<StatusFilter>("active");
-  const [hierarchy, setHierarchy] = useState<"all" | "top" | "sub">("all");
 
   const [drawer, setDrawer] =
     useState<{ mode: "create" } | { mode: "edit"; entity: Entity } | null>(null);
 
-  // Keyboard
   const searchRef = useRef<HTMLInputElement>(null);
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
 
-  // ── Org bootstrap ────────────────────────────────────────────────────
-  // Always fetch memberships so the no-org state knows whether "Switch
-  // organization" is a real option or whether the only path is create.
+  // Org bootstrap.
   useEffect(() => {
     const id = typeof window !== "undefined" ? localStorage.getItem("organization_id") : null;
     setHasOrg(!!id);
@@ -221,83 +205,33 @@ export default function EntitiesPage() {
     void loadEntityTypes();
   }, [hasOrg]);
 
-  // ── Derived data ─────────────────────────────────────────────────────
+  // ── Derived ──────────────────────────────────────────────────────────
   const q = query.trim().toLowerCase();
 
+  // Children-per-parent count, pre-computed once so each row render is O(1).
+  const childrenOf = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const e of entities) {
+      if (e.parent !== null) m.set(e.parent, (m.get(e.parent) || 0) + 1);
+    }
+    return m;
+  }, [entities]);
+
   const filtered = useMemo(() => entities.filter((e) => {
-    if (typeFilter !== "all" && e.entity_type !== typeFilter) return false;
-    if (country !== "all" && e.country !== country) return false;
-    if (currency !== "all" && e.functional_currency !== currency) return false;
     if (status === "active" && !e.is_active) return false;
-    if (status === "inactive" && e.is_active) return false;
-    if (hierarchy === "top" && e.parent !== null) return false;
-    if (hierarchy === "sub" && e.parent === null) return false;
+    if (status === "archived" && e.is_active) return false;
     if (q) {
-      const hay = `${e.code} ${e.name} ${e.legal_name} ${e.tax_id} ${e.entity_type} ${e.country}`.toLowerCase();
+      const hay = `${e.code} ${e.name} ${e.legal_name} ${e.tax_id} ${e.entity_type} ${e.country} ${e.functional_currency}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
-  }), [entities, typeFilter, country, currency, status, hierarchy, q]);
-
-  // Summary stats across *full* dataset so they reflect the org, not the filter.
-  const stats = useMemo(() => {
-    const total = entities.length;
-    const active = entities.filter((e) => e.is_active).length;
-    const jurisdictions = new Set(entities.map((e) => e.country).filter(Boolean));
-    const currencies = new Set(entities.map((e) => e.functional_currency).filter(Boolean));
-    return { total, active, jurisdictions: jurisdictions.size, currencies: currencies.size };
-  }, [entities]);
-
-  // Unique countries + currencies for the dropdowns.
-  const uniqueCountries = useMemo(
-    () => Array.from(new Set(entities.map((e) => e.country).filter(Boolean))).sort(),
-    [entities],
-  );
-  const uniqueCurrencies = useMemo(
-    () => Array.from(new Set(entities.map((e) => e.functional_currency).filter(Boolean))).sort(),
-    [entities],
-  );
-  const hasHierarchy = useMemo(() => entities.some((e) => e.parent !== null), [entities]);
-  const hasMultipleTypes = useMemo(
-    () => new Set(entities.map((e) => e.entity_type)).size > 1,
-    [entities],
-  );
-
-  // Type counts (apply every filter except type itself).
-  const typeCounts = useMemo(() => {
-    const base = entities.filter((e) => {
-      if (country !== "all" && e.country !== country) return false;
-      if (currency !== "all" && e.functional_currency !== currency) return false;
-      if (status === "active" && !e.is_active) return false;
-      if (status === "inactive" && e.is_active) return false;
-      if (hierarchy === "top" && e.parent !== null) return false;
-      if (hierarchy === "sub" && e.parent === null) return false;
-      return true;
-    });
-    const counts = new Map<string, number>();
-    for (const t of ENTITY_TYPES) counts.set(t.value, 0);
-    for (const e of base) counts.set(e.entity_type, (counts.get(e.entity_type) || 0) + 1);
-    return { counts, total: base.length };
-  }, [entities, country, currency, status, hierarchy]);
-
-  const activeFilterCount =
-    (typeFilter !== "all" ? 1 : 0) +
-    (country !== "all" ? 1 : 0) +
-    (currency !== "all" ? 1 : 0) +
-    (status !== "active" ? 1 : 0) +
-    (hierarchy !== "all" ? 1 : 0) +
-    (q ? 1 : 0);
-
-  function resetFilters() {
-    setQuery(""); setTypeFilter("all"); setCountry("all");
-    setCurrency("all"); setStatus("active"); setHierarchy("all");
-  }
+  }), [entities, status, q]);
 
   useEffect(() => {
     if (focusedIdx !== null && focusedIdx >= filtered.length) setFocusedIdx(null);
   }, [filtered, focusedIdx]);
 
-  // Keyboard: / focus, ⌘K, arrows, Enter.
+  // Keyboard: / focus, ⌘K, arrows, Enter, Esc.
   const handleKey = useCallback((e: KeyboardEvent) => {
     const tgt = e.target as HTMLElement | null;
     const inField = tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.tagName === "SELECT" || tgt.isContentEditable);
@@ -336,6 +270,15 @@ export default function EntitiesPage() {
     }
   }
 
+  async function unarchiveEntity(e: Entity) {
+    try {
+      await api.patch(`/beakon/entities/${e.id}/`, { is_active: true });
+      await load();
+    } catch (err: any) {
+      alert("Restore failed: " + JSON.stringify(err?.detail || err));
+    }
+  }
+
   async function switchToFirstOrg() {
     setSwitchingOrg(true);
     setOrgSwitchError(null);
@@ -355,8 +298,6 @@ export default function EntitiesPage() {
   }
 
   // ── No-org state ─────────────────────────────────────────────────────
-  // One strong empty state. No header description, no cards, no table —
-  // nothing competes with the decision the user needs to make.
   if (hasOrg === false) {
     const hasMemberships = memberOrgCount > 0;
     return (
@@ -400,20 +341,24 @@ export default function EntitiesPage() {
     );
   }
 
-  // Header + CTA used by every org-scoped state below.
+  // Header used by every org-scoped state.
+  const activeCount = entities.filter((e) => e.is_active).length;
   const header = (
     <PageHeader
       title="Entities"
-      description="Legal and reporting units. Each has its own books, functional currency, and fiscal calendar — and every journal entry posts to exactly one of them."
+      description="Legal and reporting units. Each has its own books, accounting standard, and fiscal calendar — every journal entry posts to exactly one."
       context={
         orgName ? (
           <div className="inline-flex items-center gap-2 rounded-full border border-canvas-200 bg-white/80 px-2.5 py-1 text-xs text-gray-600">
             <Building2 className="h-3.5 w-3.5 text-brand-600" />
             <span className="font-medium text-gray-800">{orgName}</span>
-            {stats.total > 0 && (
+            {entities.length > 0 && (
               <>
                 <span className="text-gray-300">·</span>
-                <span className="tabular-nums">{stats.total} {stats.total === 1 ? "entity" : "entities"}</span>
+                <span className="tabular-nums">{activeCount} active</span>
+                {entities.length !== activeCount && (
+                  <span className="text-gray-400 tabular-nums">/ {entities.length}</span>
+                )}
               </>
             )}
           </div>
@@ -427,7 +372,7 @@ export default function EntitiesPage() {
     />
   );
 
-  // ── Loading (first paint) ────────────────────────────────────────────
+  // First-paint loading.
   if (loading && entities.length === 0 && !loadError) {
     return (
       <div>
@@ -443,7 +388,7 @@ export default function EntitiesPage() {
     );
   }
 
-  // ── Load error ───────────────────────────────────────────────────────
+  // Load error.
   if (loadError && entities.length === 0) {
     return (
       <div>
@@ -461,9 +406,7 @@ export default function EntitiesPage() {
     );
   }
 
-  // ── Has org, zero entities ───────────────────────────────────────────
-  // Skip the cards and the toolbar entirely — they would all be zero or
-  // empty. Let the create action be the whole screen.
+  // Has org, zero entities.
   if (entities.length === 0) {
     return (
       <div>
@@ -473,173 +416,68 @@ export default function EntitiesPage() {
             tone="brand"
             icon={Building2}
             title="Create your first entity"
-            description="Start with the top-of-house — typically the holding company or family trust. Subsidiaries and branches can be added once the parent exists."
+            description="Start with the top-of-house — typically the holding company or family trust. Subsidiaries can be added once the parent exists."
             primaryAction={{ label: "Create first entity", icon: Plus, onClick: () => setDrawer({ mode: "create" }) }}
           />
         </div>
         {drawer && (
-        <EntityDrawer
-          key="create"
-          mode={drawer.mode}
-          entity={drawer.mode === "edit" ? drawer.entity : undefined}
-          entities={entities}
-          entityTypeOptions={entityTypeOptions}
-          onEntityTypeCatalogChange={loadEntityTypes}
-          onClose={() => setDrawer(null)}
-          onSaved={async () => { setDrawer(null); await load(); }}
-        />
+          <EntityDrawer
+            key="create"
+            mode={drawer.mode}
+            entity={drawer.mode === "edit" ? drawer.entity : undefined}
+            entities={entities}
+            entityTypeOptions={entityTypeOptions}
+            onEntityTypeCatalogChange={loadEntityTypes}
+            onClose={() => setDrawer(null)}
+            onSaved={async () => { setDrawer(null); await load(); }}
+          />
         )}
       </div>
     );
   }
 
-  // Toolbar controls are only useful once the underlying dataset has
-  // more than one value to filter on. Build these flags once.
-  const showCountryFilter  = uniqueCountries.length > 1;
-  const showCurrencyFilter = uniqueCurrencies.length > 1;
-  const showStructureChips = hasHierarchy;
-  const showTypeChips      = hasMultipleTypes;
-  const hasAnySelect       = showCountryFilter || showCurrencyFilter || true; // status always useful
-  const hasAnyChipRail     = showStructureChips || showTypeChips;
-
-  // ── Main page (has data) ─────────────────────────────────────────────
+  // ── Main page ────────────────────────────────────────────────────────
   return (
     <div>
       {header}
 
-      {/* Summary stats — only rendered when there is data to describe. */}
-      <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <SummaryStat
-          label="Total entities"
-          value={stats.total}
-          hint={`${stats.active} active · ${stats.total - stats.active} archived`}
-          icon={Building2}
-          tone="brand"
-        />
-        <SummaryStat
-          label="Active"
-          value={stats.active}
-          hint={
-            stats.total === 0
-              ? "—"
-              : stats.active === 0
-                ? "All archived"
-                : stats.active === stats.total
-                  ? "All active"
-                  : `${Math.round((stats.active / stats.total) * 100)}% of total`
-          }
-          icon={Check}
-          tone="mint"
-        />
-        <SummaryStat
-          label="Jurisdictions"
-          value={stats.jurisdictions}
-          hint={stats.jurisdictions === 1 ? "Single jurisdiction" : "Distinct countries"}
-          icon={Globe}
-          tone="indigo"
-        />
-        <SummaryStat
-          label="Currencies"
-          value={stats.currencies}
-          hint={stats.currencies === 1 ? "Single currency" : "Distinct functional currencies"}
-          icon={Coins}
-          tone="amber"
-        />
-      </div>
-
-      {/* Toolbar */}
-      <div className="mt-5 rounded-2xl border border-canvas-200/70 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-        <div className="flex flex-col gap-3 p-3 md:flex-row md:items-center">
-          <div className="relative flex-1 min-w-0">
-            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <input
-              ref={searchRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by code, name, legal name, tax ID"
-              className="w-full h-10 pl-9 pr-20 rounded-xl border border-canvas-200 bg-white text-sm placeholder-gray-400 focus:border-brand-400 focus:ring-4 focus:ring-brand-50 outline-none transition"
-            />
-            {query ? (
-              <button type="button" onClick={() => setQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-gray-400 hover:text-gray-700 hover:bg-canvas-50" aria-label="Clear search">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            ) : (
-              <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 hidden items-center gap-0.5 rounded-md border border-canvas-200 bg-canvas-50 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 sm:inline-flex">
-                <Command className="h-2.5 w-2.5" /> K
-              </kbd>
-            )}
-          </div>
-          {hasAnySelect && (
-            <div className="flex flex-wrap items-center gap-2">
-              {showCountryFilter && (
-                <select className="h-10 rounded-xl border border-canvas-200 bg-white text-sm px-3 focus:border-brand-400 focus:ring-4 focus:ring-brand-50 outline-none" value={country} onChange={(e) => setCountry(e.target.value)}>
-                  <option value="all">All jurisdictions</option>
-                  {uniqueCountries.map((c) => (<option key={c} value={c}>{c}</option>))}
-                </select>
-              )}
-              {showCurrencyFilter && (
-                <select className="h-10 rounded-xl border border-canvas-200 bg-white text-sm px-3 focus:border-brand-400 focus:ring-4 focus:ring-brand-50 outline-none" value={currency} onChange={(e) => setCurrency(e.target.value)}>
-                  <option value="all">All currencies</option>
-                  {uniqueCurrencies.map((c) => (<option key={c} value={c}>{c}</option>))}
-                </select>
-              )}
-              <select className="h-10 rounded-xl border border-canvas-200 bg-white text-sm px-3 focus:border-brand-400 focus:ring-4 focus:ring-brand-50 outline-none" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
-                <option value="active">Active only</option>
-                <option value="all">All statuses</option>
-                <option value="inactive">Archived</option>
-              </select>
-            </div>
+      {/* Search + status — single row, no chip rails. */}
+      <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="relative flex-1 min-w-0">
+          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by code, name, country, or currency"
+            className="w-full h-10 pl-9 pr-20 rounded-xl border border-canvas-200 bg-white text-sm placeholder-gray-400 focus:border-brand-400 focus:ring-4 focus:ring-brand-50 outline-none transition"
+          />
+          {query ? (
+            <button type="button" onClick={() => setQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-gray-400 hover:text-gray-700 hover:bg-canvas-50" aria-label="Clear search">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          ) : (
+            <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 hidden items-center gap-0.5 rounded-md border border-canvas-200 bg-canvas-50 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 sm:inline-flex">
+              <Command className="h-2.5 w-2.5" /> K
+            </kbd>
           )}
         </div>
-
-        {/* Chip rail — hierarchy + type. Hidden entirely until the dataset
-            has either a parent relationship or more than one type. */}
-        {hasAnyChipRail && (
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-canvas-100 px-3 py-2.5">
-            {showStructureChips && (
-              <>
-                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400 mr-1">Structure</span>
-                <FilterChip active={hierarchy === "all"} onClick={() => setHierarchy("all")}>All</FilterChip>
-                <FilterChip active={hierarchy === "top"} onClick={() => setHierarchy("top")}>Top-of-house</FilterChip>
-                <FilterChip active={hierarchy === "sub"} onClick={() => setHierarchy("sub")}>Subsidiaries</FilterChip>
-              </>
-            )}
-
-            {showStructureChips && showTypeChips && (
-              <span className="mx-2 h-4 w-px bg-canvas-200" />
-            )}
-
-            {showTypeChips && (
-              <>
-                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400 mr-1">Type</span>
-                <FilterChip active={typeFilter === "all"} onClick={() => setTypeFilter("all")} count={typeCounts.total}>All</FilterChip>
-                {ENTITY_TYPES.map((t) => {
-                  const c = typeCounts.counts.get(t.value) || 0;
-                  if (c === 0 && typeFilter !== t.value) return null;
-                  return (
-                    <FilterChip
-                      key={t.value}
-                      active={typeFilter === t.value}
-                      onClick={() => setTypeFilter(t.value)}
-                      count={c}
-                    >
-                      {t.label}
-                    </FilterChip>
-                  );
-                })}
-              </>
-            )}
-
-            {activeFilterCount > 0 && (
-              <>
-                <span className="mx-2 h-4 w-px bg-canvas-200" />
-                <button type="button" onClick={resetFilters} className="text-xs text-brand-700 font-medium hover:text-brand-900 hover:underline">
-                  Reset filters
-                </button>
-              </>
-            )}
-          </div>
-        )}
+        <div className="inline-flex rounded-xl border border-canvas-200 bg-white p-0.5 text-xs shrink-0">
+          {(["active", "all", "archived"] as StatusFilter[]).map((s) => (
+            <button
+              key={s}
+              onClick={() => setStatus(s)}
+              className={cn(
+                "px-3 py-1.5 rounded-lg font-medium capitalize transition-colors",
+                status === s
+                  ? "bg-brand-50 text-brand-800"
+                  : "text-gray-500 hover:text-gray-800",
+              )}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Table */}
@@ -651,29 +489,25 @@ export default function EntitiesPage() {
                 <th className="w-24 pl-5 pr-2 py-2.5 font-semibold">Code</th>
                 <th className="pr-4 py-2.5 font-semibold">Entity</th>
                 <th className="hidden md:table-cell pr-4 py-2.5 font-semibold">Type</th>
-                <th className="hidden lg:table-cell pr-4 py-2.5 font-semibold">Jurisdiction</th>
+                <th className="hidden md:table-cell pr-4 py-2.5 font-semibold">Standard</th>
+                <th className="hidden lg:table-cell pr-4 py-2.5 font-semibold">Country</th>
                 <th className="hidden lg:table-cell pr-4 py-2.5 font-semibold">Currency</th>
-                <th className="hidden xl:table-cell pr-4 py-2.5 font-semibold">Parent</th>
                 <th className="pr-4 py-2.5 font-semibold">Status</th>
                 <th className="w-10 pr-3 py-2.5"></th>
               </tr>
             </thead>
 
-            {loading ? (
-              <tbody>
-                {Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} columns={8} />)}
-              </tbody>
-            ) : filtered.length === 0 ? (
+            {filtered.length === 0 ? (
               <tbody>
                 <tr>
                   <td colSpan={8} className="p-0">
                     <EmptyState
                       icon={Search}
-                      title="No entities match these filters"
-                      description="Try broadening the type, clearing the search, or switching status to see archived entities."
+                      title="No entities match"
+                      description="Clear the search or switch the status filter to see archived entities."
                       primaryAction={
-                        activeFilterCount > 0
-                          ? { label: "Reset filters", onClick: resetFilters }
+                        q || status !== "active"
+                          ? { label: "Reset", onClick: () => { setQuery(""); setStatus("active"); } }
                           : undefined
                       }
                       className="border-0 shadow-none rounded-none"
@@ -688,6 +522,7 @@ export default function EntitiesPage() {
                   const isPerson = e.entity_type === "individual";
                   const AvatarIcon = isPerson ? User : Building;
                   const isFocused = focusedIdx === i;
+                  const subCount = childrenOf.get(e.id) || 0;
                   return (
                     <tr
                       key={e.id}
@@ -710,16 +545,62 @@ export default function EntitiesPage() {
                             <AvatarIcon className="h-3.5 w-3.5 text-gray-500" />
                           </div>
                           <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-gray-900 truncate">{e.name}</div>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-sm font-medium text-gray-900 truncate">{e.name}</span>
+                              {e.parent_code && (
+                                <span
+                                  className="inline-flex items-center gap-0.5 rounded bg-canvas-50 px-1.5 py-0.5 text-[9px] font-medium font-mono text-gray-500 ring-1 ring-inset ring-canvas-200/70 shrink-0"
+                                  title={`Subsidiary of ${e.parent_code}`}
+                                >
+                                  <Network className="h-2.5 w-2.5" />
+                                  {e.parent_code}
+                                </span>
+                              )}
+                              {subCount > 0 && (
+                                <span
+                                  className="inline-flex items-center rounded-full bg-brand-50 px-1.5 py-0.5 text-[9px] font-semibold text-brand-700 ring-1 ring-inset ring-brand-100 shrink-0"
+                                  title={`Parent of ${subCount} ${subCount === 1 ? "entity" : "entities"}`}
+                                >
+                                  {subCount} sub{subCount === 1 ? "" : "s"}
+                                </span>
+                              )}
+                            </div>
                             {e.legal_name && e.legal_name !== e.name && (
                               <div className="text-[11px] text-gray-400 truncate">{e.legal_name}</div>
                             )}
+                            {/* Mobile-only meta line — folds the type/standard/
+                                country/currency columns (which are hidden
+                                <md) into a single compact secondary row so
+                                nothing is invisible on phones. */}
+                            <div className="md:hidden mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-gray-500">
+                              <span className={cn(
+                                "inline-flex items-center px-1.5 py-0.5 rounded-full ring-1 ring-inset",
+                                meta.pill,
+                              )}>
+                                {meta.label}
+                              </span>
+                              <span className="font-mono text-gray-600">{e.country || "—"}</span>
+                              <span className="text-gray-300">·</span>
+                              <span className="font-mono text-gray-600">
+                                {e.functional_currency}
+                                {e.reporting_currency && e.reporting_currency !== e.functional_currency && (
+                                  <span className="text-gray-400"> → {e.reporting_currency}</span>
+                                )}
+                              </span>
+                              <span className="text-gray-300">·</span>
+                              <span
+                                className="inline-flex items-center rounded bg-canvas-100 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600 ring-1 ring-inset ring-canvas-200"
+                                title={standardLabel(e.accounting_standard)}
+                              >
+                                {standardShort(e.accounting_standard)}
+                              </span>
+                            </div>
                           </div>
                           <Link
                             href={`/dashboard/entities/${e.id}?tab=investments`}
                             onClick={(ev) => ev.stopPropagation()}
                             title="View investments"
-                            className="hidden sm:inline-flex items-center gap-1 rounded-full border border-brand-100 bg-brand-50/80 px-2 py-0.5 text-[10px] font-semibold text-brand-700 hover:bg-brand-100 transition-colors shrink-0"
+                            className="hidden sm:inline-flex items-center gap-1 rounded-full border border-brand-100 bg-brand-50/80 px-2 py-0.5 text-[10px] font-semibold text-brand-700 hover:bg-brand-100 transition-colors shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100"
                           >
                             <Briefcase className="h-3 w-3" />
                             Investments
@@ -734,36 +615,21 @@ export default function EntitiesPage() {
                           {meta.label}
                         </span>
                       </td>
-                      <td className="hidden lg:table-cell pr-4 py-2.5">
-                        <span className="inline-flex items-center gap-1.5 text-xs text-gray-600">
-                          <Globe className="h-3 w-3 text-gray-400" />
-                          <span className="font-mono">{e.country || "—"}</span>
+                      <td className="hidden md:table-cell pr-4 py-2.5">
+                        <span
+                          className="inline-flex items-center rounded-full bg-canvas-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600 ring-1 ring-inset ring-canvas-200"
+                          title={standardLabel(e.accounting_standard)}
+                        >
+                          {standardShort(e.accounting_standard)}
                         </span>
                       </td>
-                      <td className="hidden lg:table-cell pr-4 py-2.5">
-                        <div className="flex items-center gap-1.5">
-                          <div className="font-mono text-xs text-gray-700">{e.functional_currency}</div>
-                          {e.accounting_standard && (
-                            <span
-                              className="inline-flex items-center rounded-full bg-canvas-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600 ring-1 ring-inset ring-canvas-200"
-                              title={`Accounting standard: ${ACCOUNTING_STANDARDS.find((s) => s.value === e.accounting_standard)?.label || e.accounting_standard}`}
-                            >
-                              {standardShort(e.accounting_standard)}
-                            </span>
-                          )}
-                        </div>
-                        {e.reporting_currency && e.reporting_currency !== e.functional_currency && (
-                          <div className="text-[10px] text-gray-400">reports in {e.reporting_currency}</div>
-                        )}
+                      <td className="hidden lg:table-cell pr-4 py-2.5 font-mono text-xs text-gray-600">
+                        {e.country || "—"}
                       </td>
-                      <td className="hidden xl:table-cell pr-4 py-2.5 text-xs">
-                        {e.parent_code ? (
-                          <span className="inline-flex items-center gap-1 font-mono text-gray-600">
-                            <Network className="h-3 w-3 text-gray-400" />
-                            {e.parent_code}
-                          </span>
-                        ) : (
-                          <span className="text-[11px] text-gray-400 italic">top-of-house</span>
+                      <td className="hidden lg:table-cell pr-4 py-2.5 font-mono text-xs text-gray-700">
+                        {e.functional_currency}
+                        {e.reporting_currency && e.reporting_currency !== e.functional_currency && (
+                          <span className="text-[10px] text-gray-400 ml-1">→ {e.reporting_currency}</span>
                         )}
                       </td>
                       <td className="pr-4 py-2.5">
@@ -785,6 +651,7 @@ export default function EntitiesPage() {
                           entity={e}
                           onEdit={() => setDrawer({ mode: "edit", entity: e })}
                           onArchive={() => archiveEntity(e)}
+                          onUnarchive={() => unarchiveEntity(e)}
                         />
                       </td>
                     </tr>
@@ -816,8 +683,13 @@ export default function EntitiesPage() {
 // ── Row actions ───────────────────────────────────────────────────────────
 
 function RowActions({
-  entity, onEdit, onArchive,
-}: { entity: Entity; onEdit: () => void; onArchive: () => void }) {
+  entity, onEdit, onArchive, onUnarchive,
+}: {
+  entity: Entity;
+  onEdit: () => void;
+  onArchive: () => void;
+  onUnarchive: () => void;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
@@ -853,12 +725,19 @@ function RowActions({
             >
               <Briefcase className="h-3.5 w-3.5" /> View investments
             </Link>
-            {entity.is_active && (
+            {entity.is_active ? (
               <button
                 onClick={(ev) => { ev.stopPropagation(); setOpen(false); onArchive(); }}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-amber-700 hover:bg-amber-50"
               >
                 <Archive className="h-3.5 w-3.5" /> Archive
+              </button>
+            ) : (
+              <button
+                onClick={(ev) => { ev.stopPropagation(); setOpen(false); onUnarchive(); }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-mint-700 hover:bg-mint-50"
+              >
+                <Archive className="h-3.5 w-3.5" /> Restore
               </button>
             )}
           </div>
@@ -894,9 +773,7 @@ function EntityDrawer({
     country: entity?.country || "CH",
     accounting_standard:
       entity?.accounting_standard || defaultStandardForCountry(entity?.country || "CH"),
-    // Tracks whether the user manually picked a standard. Until they do,
-    // changing the country auto-updates the standard. After a manual pick,
-    // we stop overriding so we don't clobber an explicit choice.
+    // Stops the country->standard auto-update from clobbering an explicit pick.
     accounting_standard_touched: Boolean(entity?.accounting_standard),
     fiscal_year_start_month: entity?.fiscal_year_start_month || 1,
     tax_id: entity?.tax_id || "",
@@ -906,10 +783,6 @@ function EntityDrawer({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // "More options" is collapsed by default on create, expanded on edit so
-  // existing values (code, legal name, tax ID) stay visible for review.
-  const [advancedOpen, setAdvancedOpen] = useState(isEdit);
-
   const update = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
@@ -917,8 +790,6 @@ function EntityDrawer({
     (e) => e.id !== entity?.id && e.is_active,
   );
 
-  // Auto-derive a short unique code from the name when the user hasn't
-  // set one. Client-side only — Thomas can rename via edit later.
   function deriveCode(name: string, type: string): string {
     const stem = name
       .toUpperCase()
@@ -961,34 +832,31 @@ function EntityDrawer({
     }
   }
 
-  const meta = typeMeta(form.entity_type);
   const isPerson = form.entity_type === "individual";
-  // Pick an example name that fits the selected type — helps Thomas see what
-  // to type for a Swiss family-office setup.
   const namePlaceholder = isPerson
     ? "e.g. Thomas Müller"
     : form.entity_type === "holding_company"
       ? "e.g. Schmidt Holdings AG"
       : form.entity_type === "operating_company"
         ? "e.g. Alpine Wealth Management Ltd"
-    : form.entity_type === "trust"
-      ? "e.g. Müller Family Trust"
-      : form.entity_type === "family"
-        ? "e.g. Müller Family Office"
-      : form.entity_type === "foundation"
-        ? "e.g. Stiftung Helvetia"
-        : form.entity_type === "spv"
-          ? "e.g. Aurora SPV I Ltd"
-        : form.entity_type === "fund"
-          ? "e.g. Alpine Growth Fund"
-          : "e.g. Schmidt Holdings AG";
+      : form.entity_type === "trust"
+        ? "e.g. Müller Family Trust"
+        : form.entity_type === "family"
+          ? "e.g. Müller Family Office"
+          : form.entity_type === "foundation"
+            ? "e.g. Stiftung Helvetia"
+            : form.entity_type === "spv"
+              ? "e.g. Aurora SPV I Ltd"
+              : form.entity_type === "fund"
+                ? "e.g. Alpine Growth Fund"
+                : "e.g. Schmidt Holdings AG";
 
   return (
     <div className="fixed inset-0 z-40 flex" role="dialog" aria-modal="true">
       <div className="flex-1 bg-slate-900/30 backdrop-blur-sm" onClick={onClose} />
-      <div className="w-full sm:w-[520px] bg-white border-l border-canvas-200 overflow-y-auto flex flex-col">
+      <div className="w-full sm:w-[560px] bg-white border-l border-canvas-200 overflow-y-auto flex flex-col">
         {/* Drawer header */}
-        <div className="relative px-5 pt-5 pb-4 border-b border-canvas-100 bg-gradient-to-b from-canvas-50/60 to-white">
+        <div className="px-5 pt-5 pb-4 border-b border-canvas-100 bg-gradient-to-b from-canvas-50/60 to-white">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
@@ -997,11 +865,6 @@ function EntityDrawer({
               <h2 className="mt-0.5 text-lg font-semibold text-gray-900 tracking-tight">
                 {isEdit ? `${entity?.code} · ${entity?.name}` : "Add an entity"}
               </h2>
-              {!isEdit && (
-                <p className="mt-1 text-xs text-gray-500 max-w-sm">
-                  Just name it and pick a type — we'll fill in sensible Swiss defaults. Refine the rest in "More options".
-                </p>
-              )}
             </div>
             <button onClick={onClose} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-canvas-100" aria-label="Close">
               <X className="w-5 h-5" />
@@ -1009,216 +872,183 @@ function EntityDrawer({
           </div>
         </div>
 
-        <form onSubmit={submit} className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
-          {/* Primary fields — name, type, country, currency */}
-          <FieldLabel label="Name" required>
-            <input
-              className="input"
-              value={form.name}
-              onChange={(e) => update("name", e.target.value)}
-              placeholder={namePlaceholder}
-              autoFocus={!isEdit}
-            />
-          </FieldLabel>
-
-          <FieldLabel label="Type" required>
-            <EntityTypeField
-              value={form.entity_type}
-              options={entityTypeOptions}
-              onChange={(next) => update("entity_type", next)}
-              onCatalogChange={onEntityTypeCatalogChange}
-            />
-          </FieldLabel>
-
-          <div className="grid grid-cols-2 gap-3">
-            <FieldLabel label="Country" hint="Pick a suggestion or type any ISO 3166-1 alpha-2 code">
+        <form onSubmit={submit} className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+          {/* Identity */}
+          <Section title="Identity">
+            <FieldLabel label="Name" required>
               <input
-                className="input uppercase font-mono"
-                list={COUNTRY_DATALIST_ID}
-                value={form.country}
-                onChange={(e) => {
-                  const next = e.target.value.toUpperCase().slice(0, 2);
+                className="input"
+                value={form.name}
+                onChange={(e) => update("name", e.target.value)}
+                placeholder={namePlaceholder}
+                autoFocus={!isEdit}
+              />
+            </FieldLabel>
+
+            <FieldLabel label="Type" required>
+              <EntityTypeField
+                value={form.entity_type}
+                options={entityTypeOptions}
+                onChange={(next) => update("entity_type", next)}
+                onCatalogChange={onEntityTypeCatalogChange}
+              />
+            </FieldLabel>
+
+            <div className="grid grid-cols-2 gap-3">
+              <FieldLabel label="Code" hint={isEdit ? "Fixed once created." : "Auto-generated from the name if blank."}>
+                <input
+                  className="input font-mono uppercase"
+                  value={form.code}
+                  onChange={(e) => update("code", e.target.value.toUpperCase())}
+                  placeholder={isEdit ? "" : "Auto"}
+                  disabled={isEdit}
+                />
+              </FieldLabel>
+              <FieldLabel label="Legal name" hint="Full registered name">
+                <input
+                  className="input"
+                  value={form.legal_name}
+                  onChange={(e) => update("legal_name", e.target.value)}
+                  placeholder={isPerson ? "e.g. Thomas Jakob Müller" : "e.g. Schmidt Holdings AG"}
+                />
+              </FieldLabel>
+            </div>
+          </Section>
+
+          {/* Books & jurisdiction */}
+          <Section title="Books & jurisdiction">
+            <div className="grid grid-cols-2 gap-3">
+              <FieldLabel label="Country" hint="ISO 3166-1 alpha-2">
+                <input
+                  className="input uppercase font-mono"
+                  list={COUNTRY_DATALIST_ID}
+                  value={form.country}
+                  onChange={(e) => {
+                    const next = e.target.value.toUpperCase().slice(0, 2);
+                    setForm((f) => ({
+                      ...f,
+                      country: next,
+                      accounting_standard: f.accounting_standard_touched
+                        ? f.accounting_standard
+                        : defaultStandardForCountry(next),
+                    }));
+                  }}
+                  maxLength={2}
+                  placeholder="CH"
+                />
+              </FieldLabel>
+              <FieldLabel label="Functional currency" required hint="ISO 4217">
+                <input
+                  className="input font-mono"
+                  list={CURRENCY_DATALIST_ID}
+                  value={form.functional_currency}
+                  onChange={(e) => update("functional_currency", e.target.value.toUpperCase().slice(0, 3))}
+                  maxLength={3}
+                  placeholder="EUR"
+                />
+              </FieldLabel>
+            </div>
+
+            <FieldLabel
+              label="Accounting standard"
+              required
+              hint="Drives AI account suggestions and the teaching note shown next to each AI proposal. Defaults from country."
+            >
+              <select
+                className="input"
+                value={form.accounting_standard}
+                onChange={(e) =>
                   setForm((f) => ({
                     ...f,
-                    country: next,
-                    // Only override the standard if the user hasn't manually
-                    // picked one yet — otherwise we'd clobber an explicit
-                    // choice when they tweak the country code.
-                    accounting_standard: f.accounting_standard_touched
-                      ? f.accounting_standard
-                      : defaultStandardForCountry(next),
-                  }));
-                }}
-                maxLength={2}
-                placeholder="CH"
-              />
+                    accounting_standard: e.target.value,
+                    accounting_standard_touched: true,
+                  }))
+                }
+              >
+                {ACCOUNTING_STANDARDS.map((s) => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
             </FieldLabel>
-            <FieldLabel label="Functional currency" required hint="Pick a suggestion or type any ISO 4217 code">
+
+            <div className="grid grid-cols-2 gap-3">
+              <FieldLabel label="Reporting currency" hint="Blank = same as functional">
+                <input
+                  className="input font-mono"
+                  list={CURRENCY_DATALIST_ID}
+                  value={form.reporting_currency}
+                  onChange={(e) => update("reporting_currency", e.target.value.toUpperCase().slice(0, 3))}
+                  maxLength={3}
+                  placeholder="Same as functional"
+                />
+              </FieldLabel>
+              <FieldLabel label="Fiscal year starts">
+                <select
+                  className="input"
+                  value={form.fiscal_year_start_month}
+                  onChange={(e) => update("fiscal_year_start_month", Number(e.target.value))}
+                >
+                  {MONTHS.map((m, i) => (
+                    <option key={m} value={i + 1}>{m}</option>
+                  ))}
+                </select>
+              </FieldLabel>
+            </div>
+
+            <FieldLabel label="Tax ID" hint="UID, VAT, TIN, etc.">
               <input
                 className="input font-mono"
-                list={CURRENCY_DATALIST_ID}
-                value={form.functional_currency}
-                onChange={(e) => update("functional_currency", e.target.value.toUpperCase().slice(0, 3))}
-                maxLength={3}
-                placeholder="EUR"
+                value={form.tax_id}
+                onChange={(e) => update("tax_id", e.target.value)}
+                placeholder={isPerson ? "e.g. 756.1234.5678.90" : "e.g. CHE-123.456.789"}
               />
             </FieldLabel>
-          </div>
+          </Section>
 
-          <FieldLabel
-            label="Accounting standard"
-            required
-            hint="Drives how the AI proposes entries and what rule it cites in its teaching note. Defaults from country — change if your books follow a different framework."
-          >
-            <select
-              className="input"
-              value={form.accounting_standard}
-              onChange={(e) =>
-                setForm((f) => ({
-                  ...f,
-                  accounting_standard: e.target.value,
-                  accounting_standard_touched: true,
-                }))
-              }
-            >
-              {ACCOUNTING_STANDARDS.map((s) => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
-          </FieldLabel>
+          {/* Hierarchy */}
+          <Section title="Hierarchy">
+            <FieldLabel label="Parent entity" hint="Leave blank for top-of-house (consolidation root).">
+              <select className="input" value={form.parent} onChange={(e) => update("parent", e.target.value)}>
+                <option value="">— Top-of-house —</option>
+                {parentCandidates.map((p) => (
+                  <option key={p.id} value={p.id}>{p.code} · {p.name}</option>
+                ))}
+              </select>
+            </FieldLabel>
+          </Section>
+
+          {/* Notes */}
+          <Section title="Notes">
+            <FieldLabel label="Internal notes" hint="Not shown on external reports">
+              <textarea
+                className="input min-h-[80px] resize-y"
+                value={form.notes}
+                onChange={(e) => update("notes", e.target.value)}
+                placeholder={isPerson
+                  ? "e.g. Principal beneficiary of the Müller Family Trust."
+                  : "e.g. Zug-based holding — parent of the Swiss OpCo and the German subsidiary."}
+              />
+            </FieldLabel>
+
+            {isEdit && (
+              <label className="flex items-start gap-2 text-xs text-gray-700 cursor-pointer mt-3">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 rounded border-canvas-200"
+                  checked={form.is_active}
+                  onChange={(e) => update("is_active", e.target.checked)}
+                />
+                <span>
+                  <span className="font-medium">Entity is active</span>
+                  <span className="block text-gray-400 mt-0.5">
+                    Archived entities are hidden from pickers. History remains intact.
+                  </span>
+                </span>
+              </label>
+            )}
+          </Section>
 
           <EntityReferenceDatalists />
-
-          {/* Contextual reassurance */}
-          <div className="inline-flex items-center gap-2 rounded-lg bg-canvas-50 px-2.5 py-1.5 text-[11px] text-gray-600 ring-1 ring-inset ring-canvas-200/70">
-            <Info className="h-3 w-3 text-gray-400" />
-            <span>
-              <span className={cn("inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full ring-1 ring-inset mr-1.5", meta.pill)}>
-                {meta.label}
-              </span>
-              {isPerson
-                ? "A person — can hold investments, bank accounts, and their own books."
-                : form.parent
-                  ? "Subsidiary — rolls up to its parent for consolidation."
-                  : "Top-of-house — consolidation root for everything below."}
-            </span>
-          </div>
-
-          {/* More options — collapsed by default on create */}
-          <div className="rounded-xl border border-canvas-200/70 bg-white overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setAdvancedOpen((v) => !v)}
-              className="w-full flex items-center justify-between px-3.5 py-2.5 text-left hover:bg-canvas-50 transition-colors"
-              aria-expanded={advancedOpen}
-            >
-              <span className="text-xs font-semibold text-gray-700">More options</span>
-              <span className="flex items-center gap-2">
-                {!advancedOpen && (
-                  <span className="text-[10px] text-gray-400">
-                    Code, parent, reporting currency, FY, tax ID, notes
-                  </span>
-                )}
-                <ChevronDown className={cn(
-                  "h-4 w-4 text-gray-400 transition-transform",
-                  advancedOpen && "rotate-180",
-                )} />
-              </span>
-            </button>
-
-            {advancedOpen && (
-              <div className="border-t border-canvas-100 px-3.5 pt-3.5 pb-4 space-y-3.5 bg-canvas-50/40">
-                <FieldLabel label="Code" hint={isEdit ? "The code is fixed once the entity exists." : "Leave blank to auto-generate from the name."}>
-                  <input
-                    className="input font-mono uppercase"
-                    value={form.code}
-                    onChange={(e) => update("code", e.target.value.toUpperCase())}
-                    placeholder={isEdit ? "" : "Auto"}
-                    disabled={isEdit}
-                  />
-                </FieldLabel>
-
-                <FieldLabel label="Legal name" hint="Full registered name on legal documents">
-                  <input
-                    className="input"
-                    value={form.legal_name}
-                    onChange={(e) => update("legal_name", e.target.value)}
-                    placeholder={isPerson ? "e.g. Thomas Jakob Müller" : "e.g. Schmidt Holdings AG"}
-                  />
-                </FieldLabel>
-
-                <FieldLabel label="Parent entity" hint="For subsidiaries / sub-funds">
-                  <select className="input" value={form.parent} onChange={(e) => update("parent", e.target.value)}>
-                    <option value="">— Top-of-house —</option>
-                    {parentCandidates.map((p) => (
-                      <option key={p.id} value={p.id}>{p.code} · {p.name}</option>
-                    ))}
-                  </select>
-                </FieldLabel>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <FieldLabel label="Reporting currency" hint="Blank = same as functional. You can type any ISO 4217 code.">
-                    <input
-                      className="input font-mono"
-                      list={CURRENCY_DATALIST_ID}
-                      value={form.reporting_currency}
-                      onChange={(e) => update("reporting_currency", e.target.value.toUpperCase().slice(0, 3))}
-                      maxLength={3}
-                      placeholder="Same as functional"
-                    />
-                  </FieldLabel>
-                  <FieldLabel label="Fiscal year starts">
-                    <select
-                      className="input"
-                      value={form.fiscal_year_start_month}
-                      onChange={(e) => update("fiscal_year_start_month", Number(e.target.value))}
-                    >
-                      {MONTHS.map((m, i) => (
-                        <option key={m} value={i + 1}>{m}</option>
-                      ))}
-                    </select>
-                  </FieldLabel>
-                </div>
-
-                <FieldLabel label="Tax ID" hint="UID, VAT, TIN, etc.">
-                  <input
-                    className="input font-mono"
-                    value={form.tax_id}
-                    onChange={(e) => update("tax_id", e.target.value)}
-                    placeholder={isPerson ? "e.g. 756.1234.5678.90" : "e.g. CHE-123.456.789"}
-                  />
-                </FieldLabel>
-
-                <FieldLabel label="Internal notes" hint="Not shown on external reports">
-                  <textarea
-                    className="input min-h-[64px] resize-y"
-                    value={form.notes}
-                    onChange={(e) => update("notes", e.target.value)}
-                    placeholder={isPerson
-                      ? "e.g. Principal beneficiary of the Müller Family Trust."
-                      : "e.g. Zug-based holding — parent of the Swiss OpCo and the German subsidiary."}
-                  />
-                </FieldLabel>
-
-                {isEdit && (
-                  <label className="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5 rounded border-canvas-200"
-                      checked={form.is_active}
-                      onChange={(e) => update("is_active", e.target.checked)}
-                    />
-                    <span>
-                      <span className="font-medium">Entity is active</span>
-                      <span className="block text-gray-400 mt-0.5">
-                        Archived entities are hidden from pickers. History remains intact.
-                      </span>
-                    </span>
-                  </label>
-                )}
-              </div>
-            )}
-          </div>
 
           {error && (
             <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
@@ -1242,6 +1072,20 @@ function EntityDrawer({
         </div>
       </div>
     </div>
+  );
+}
+
+
+// ── Tiny helpers ──────────────────────────────────────────────────────────
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <h3 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-gray-400">
+        {title}
+      </h3>
+      <div className="space-y-3">{children}</div>
+    </section>
   );
 }
 

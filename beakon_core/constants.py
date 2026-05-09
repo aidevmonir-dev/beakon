@@ -115,6 +115,8 @@ ACCOUNT_SUBTYPE_CHOICES = [
     ("inventory", "Inventory"),
     ("investment", "Investment"),
     ("loan_receivable", "Loan Receivable"),
+    ("vat_receivable", "VAT Receivable (Input VAT)"),
+    ("tax_receivable", "Tax Receivable"),
     ("fixed_asset", "Fixed Asset"),
     ("accumulated_depreciation", "Accumulated Depreciation"),
     ("intangible_asset", "Intangible Asset"),
@@ -180,6 +182,8 @@ MONETARY_SUBTYPES = (
     "accounts_receivable",
     "intercompany_receivable",
     "loan_receivable",
+    "vat_receivable",
+    "tax_receivable",
     "accounts_payable",
     "intercompany_payable",
     "accrued_liability",
@@ -243,6 +247,8 @@ SOURCE_OPENING_BALANCE = "opening_balance"
 SOURCE_ADJUSTMENT = "adjustment"
 SOURCE_REVERSAL = "reversal"
 SOURCE_FX_REVALUATION = "fx_revaluation"
+SOURCE_PERIOD_CLOSE = "period_close"
+SOURCE_RECOGNITION = "recognition"
 
 SOURCE_TYPE_CHOICES = [
     (SOURCE_MANUAL, "Manual Entry"),
@@ -256,6 +262,8 @@ SOURCE_TYPE_CHOICES = [
     (SOURCE_ADJUSTMENT, "Adjustment"),
     (SOURCE_REVERSAL, "Reversal"),
     (SOURCE_FX_REVALUATION, "FX Revaluation"),
+    (SOURCE_PERIOD_CLOSE, "Period Close"),
+    (SOURCE_RECOGNITION, "Recognition / Accrual"),
 ]
 
 
@@ -319,3 +327,4 @@ ERR_ACCOUNT_ENTITY_MISMATCH = "BK013"
 ERR_INTERCOMPANY_UNBALANCED = "BK014"
 ERR_CURRENCY_MISMATCH = "BK015"
 ERR_SELF_APPROVAL = "BK016"
+ERR_DIMENSION_REQUIRED = "BK017"

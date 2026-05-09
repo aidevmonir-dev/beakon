@@ -28,8 +28,15 @@ from api.serializers.beakon import (
     DimensionTypeSerializer,
     DimensionValueSerializer,
     DimensionValidationRuleSerializer,
+    BankAccountMasterSerializer,
+    CounterpartySerializer,
+    CustodianSerializer,
     InstrumentSerializer,
     LoanSerializer,
+    PolicySerializer,
+    PortfolioSerializer,
+    PropertySerializer,
+    RelatedPartySerializer,
     TaxLotSerializer,
     ApprovalActionSerializer,
     BillCreateSerializer,
@@ -78,10 +85,17 @@ from beakon_core.models import (
     FXRate,
     IntercompanyGroup,
     Invoice,
+    BankAccountMaster,
+    Counterparty,
+    Custodian,
     Instrument,
     JournalEntry,
     Loan,
     Period,
+    Policy,
+    Portfolio,
+    Property,
+    RelatedParty,
     TaxLot,
     Vendor,
 )
@@ -120,8 +134,38 @@ class FXRateListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated, IsOrganizationMember]
     queryset = FXRate.objects.all()
     serializer_class = FXRateSerializer
-    filterset_fields = ["from_currency", "to_currency"]
+    filterset_fields = ["from_currency", "to_currency", "source"]
     ordering_fields = ["as_of"]
+
+
+class FXRateSyncECBView(APIView):
+    """POST /beakon/fx-rates/sync-ecb/
+
+    Body: ``{"days": 1}`` (default) or ``{"days": 90}`` for the last 90
+    business days. Pulls EUR-base reference rates from the European
+    Central Bank, derives inverses + CHF cross-rates, upserts to FXRate.
+
+    Returns the SyncResult so the UI can show "fetched 1 day, 114 rows
+    upserted, latest 2026-05-07".
+    """
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+
+    def post(self, request):
+        from beakon_core.services import ECBFXService
+        from beakon_core.services.ecb_fx import ECBSyncError
+        try:
+            days = int(request.data.get("days") or 1)
+        except (TypeError, ValueError):
+            days = 1
+        days = max(1, min(days, 90))
+        try:
+            result = ECBFXService.sync(days=days)
+        except ECBSyncError as e:
+            return Response(
+                {"error": {"code": "ECB_SYNC", "message": str(e)}},
+                status=http.HTTP_502_BAD_GATEWAY,
+            )
+        return Response(result.as_dict())
 
 
 # ── Entity ──────────────────────────────────────────────────────────────────
@@ -138,6 +182,7 @@ class EntityViewSet(OrganizationFilterMixin, ModelViewSet):
         from beakon_core.constants import (
             default_accounting_standard_for_country,
         )
+        from beakon_core.services import EntityService
         # Country-aware fallback for the accounting standard. If the client
         # didn't specify one (older API consumers, scripted seeds), pick a
         # sensible default from the entity's country instead of letting the
@@ -147,11 +192,15 @@ class EntityViewSet(OrganizationFilterMixin, ModelViewSet):
             validated["accounting_standard"] = (
                 default_accounting_standard_for_country(validated.get("country") or "")
             )
-        serializer.save(
-            organization=self.request.organization,
-            created_by=self.request.user,
-            accounting_standard=validated["accounting_standard"],
-        )
+        with transaction.atomic():
+            serializer.save(
+                organization=self.request.organization,
+                created_by=self.request.user,
+                accounting_standard=validated["accounting_standard"],
+            )
+            # Plant the minimum CoA so AP/AR/bank/period-close all work
+            # without a manual setup step. Idempotent — safe if rerun.
+            EntityService.seed_default_coa(serializer.instance)
 
     def destroy(self, request, *args, **kwargs):
         """Hard-delete an entity. Blocked by PROTECT FKs (journal entries,
@@ -317,6 +366,207 @@ class TaxLotViewSet(OrganizationFilterMixin, ModelViewSet):
     ordering_fields = [
         "tax_lot_id", "acquisition_trade_date", "lot_status",
         "remaining_quantity", "remaining_cost_reporting_ccy",
+    ]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class CounterpartyViewSet(OrganizationFilterMixin, ModelViewSet):
+    """Workbook tab `10_Counterparty_Master`. External vendors / schools /
+    insurers / tax authorities / banks-as-providers."""
+    serializer_class = CounterpartySerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = Counterparty.objects.all()
+    filterset_fields = [
+        "counterparty_type", "status", "active_flag",
+        "country_code", "base_currency", "kyc_status",
+        "aml_risk_level", "risk_rating",
+        "related_party_flag", "intercompany_flag",
+        "loan_eligible_flag", "ap_eligible_flag", "ar_eligible_flag",
+        "tax_eligible_flag", "insurance_eligible_flag",
+        "education_eligible_flag", "professional_fees_eligible_flag",
+    ]
+    search_fields = ["counterparty_id", "counterparty_name", "short_name",
+                     "external_reference", "tax_id", "registration_no",
+                     "default_bank_reference", "notes"]
+    ordering_fields = ["counterparty_id", "counterparty_type", "status"]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class BankAccountMasterViewSet(OrganizationFilterMixin, ModelViewSet):
+    """Workbook tab `12_Bank_Account_Master` (governed bank account)."""
+    serializer_class = BankAccountMasterSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = BankAccountMaster.objects.select_related(
+        "account_holder_related_party", "bank_counterparty",
+        "credit_line_linked_loan", "default_portfolio",
+        "default_related_party", "default_counterparty",
+    )
+    filterset_fields = [
+        "account_type", "account_subtype", "account_purpose",
+        "status", "active_flag", "posting_allowed_flag",
+        "restricted_flag", "interest_bearing_flag", "overdraft_allowed_flag",
+        "country_code", "account_currency", "kyc_status",
+    ]
+    search_fields = ["bank_account_id", "bank_account_name", "short_name",
+                     "bank_name", "iban_or_account_no_masked", "swift_bic",
+                     "account_holder_id_code", "bank_counterparty_id_code",
+                     "credit_line_linked_loan_id_code", "default_portfolio_code",
+                     "default_related_party_id_code", "default_counterparty_id_code",
+                     "notes"]
+    ordering_fields = ["bank_account_id", "account_type", "status",
+                       "opening_date", "closing_date"]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class PropertyViewSet(OrganizationFilterMixin, ModelViewSet):
+    """Workbook tab `15_Property_Master`. Real assets and properties."""
+    serializer_class = PropertySerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = Property.objects.select_related(
+        "owner_related_party", "primary_related_party",
+        "linked_portfolio", "linked_loan",
+    )
+    filterset_fields = [
+        "property_type", "property_subtype", "usage_type",
+        "ownership_type", "owner_type", "status", "active_flag",
+        "mortgage_linked_flag", "rental_income_flag",
+        "personal_use_flag", "expense_allocation_allowed_flag",
+        "net_worth_inclusion_flag", "country_code",
+        "property_currency", "valuation_method",
+    ]
+    search_fields = ["property_id", "property_name", "short_name",
+                     "owner_id_code", "primary_related_party_id_code",
+                     "linked_portfolio_id_code", "linked_loan_id_code",
+                     "linked_spv_id", "city", "address_line_1",
+                     "postal_code", "notes"]
+    ordering_fields = ["property_id", "property_type", "status",
+                       "acquisition_date", "current_carrying_value"]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class PolicyViewSet(OrganizationFilterMixin, ModelViewSet):
+    """Workbook tab `16_Policy_Master`. Insurance / wrapper policies."""
+    serializer_class = PolicySerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = Policy.objects.select_related(
+        "policy_owner_related_party", "primary_related_party",
+        "insured_party_related_party", "insurer_counterparty",
+        "linked_portfolio", "linked_property",
+        "linked_beneficiary_related_party",
+    )
+    filterset_fields = [
+        "policy_type", "policy_subtype", "status", "active_flag",
+        "investment_linked_flag", "claim_eligible_flag",
+        "premium_payable_flag", "country_code",
+        "policy_currency", "premium_frequency",
+    ]
+    search_fields = ["policy_id", "policy_name", "short_name",
+                     "policy_owner_id_code", "primary_related_party_id_code",
+                     "insured_party_id_code", "insurer_counterparty_id_code",
+                     "linked_portfolio_id_code", "linked_property_id_code",
+                     "linked_beneficiary_id_code", "policy_number_masked",
+                     "notes"]
+    ordering_fields = ["policy_id", "policy_type", "status",
+                       "inception_date", "expiry_date"]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class RelatedPartyViewSet(OrganizationFilterMixin, ModelViewSet):
+    """Workbook tab `11_Related_Party_Master`. People and entities connected
+    to the client — drives RP/FAM dimensions, related-party balances,
+    family expenses, beneficiary tracking."""
+    serializer_class = RelatedPartySerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = RelatedParty.objects.select_related("default_portfolio")
+    filterset_fields = [
+        "related_party_type", "party_form", "status", "active_flag",
+        "country_code", "tax_residence_country", "base_currency",
+        "control_flag", "beneficiary_flag", "settlor_flag",
+        "protector_flag", "director_flag", "signer_flag",
+        "loan_eligible_flag", "distribution_eligible_flag",
+        "capital_contribution_eligible_flag",
+        "expense_allocation_eligible_flag",
+        "family_expense_eligible_flag", "net_worth_inclusion_flag",
+    ]
+    search_fields = [
+        "related_party_id", "related_party_name", "short_name",
+        "related_party_subtype", "relationship_to_client",
+        "default_portfolio_code", "default_property_code",
+        "default_bank_reference", "notes",
+    ]
+    ordering_fields = [
+        "related_party_id", "related_party_type", "status",
+        "related_party_since", "related_party_until",
+    ]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class CustodianViewSet(OrganizationFilterMixin, ModelViewSet):
+    """Workbook tab `13_Custodian_Master`. Custody venues with capability
+    flags driving where investments / cash are allowed to post."""
+    serializer_class = CustodianSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = Custodian.objects.select_related("default_portfolio")
+    filterset_fields = [
+        "custodian_type", "status", "active_flag",
+        "country_code", "base_currency",
+        "supports_listed_securities_flag", "supports_private_assets_flag",
+        "supports_funds_flag", "supports_derivatives_flag",
+        "supports_digital_assets_flag", "supports_cash_sweep_flag",
+        "nominee_holding_flag", "segregated_account_flag",
+        "posting_allowed_flag",
+    ]
+    search_fields = [
+        "custodian_id", "custodian_name", "short_name",
+        "linked_counterparty_id", "legal_entity_name",
+        "booking_center", "default_portfolio_code", "notes",
+    ]
+    ordering_fields = [
+        "custodian_id", "custodian_type", "status",
+        "relationship_start_date",
+    ]
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.organization)
+
+
+class PortfolioViewSet(OrganizationFilterMixin, ModelViewSet):
+    """Workbook tab `14_Portfolio_Master`. Reporting / strategy buckets that
+    investments and tax lots tag into via the PORT dimension."""
+    serializer_class = PortfolioSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = Portfolio.objects.select_related("parent")
+    filterset_fields = [
+        "portfolio_type", "portfolio_subtype", "owner_type",
+        "status", "active_flag",
+        "discretionary_flag", "consolidation_flag",
+        "net_worth_inclusion_flag", "performance_report_flag",
+        "posting_allowed_flag",
+        "base_currency", "country_code",
+        "linked_custodian_id", "reporting_group",
+    ]
+    search_fields = [
+        "portfolio_id", "portfolio_name", "short_name",
+        "portfolio_subtype",
+        "owner_id", "primary_related_party_id", "linked_custodian_id",
+        "strategy_code", "asset_allocation_profile",
+        "parent_portfolio_workbook_id", "reporting_group", "notes",
+    ]
+    ordering_fields = [
+        "portfolio_id", "portfolio_type", "status",
+        "open_date", "close_date",
     ]
 
     def perform_create(self, serializer):
@@ -697,6 +947,15 @@ class BillViewSet(OrganizationFilterMixin, GenericViewSet):
 
     def list(self, request):
         qs = self.filter_queryset(self.get_queryset()).order_by("-invoice_date", "-id")
+        # Hide cancelled bills from the default "All" view — cancellation IS
+        # the accounting deletion, but cancelled drafts shouldn't pollute the
+        # day-to-day list. The "Cancelled" filter pill explicitly sets
+        # ?status=cancelled which bypasses this, so users can still find them.
+        # Pass ?include_cancelled=true to see everything (admin / audit use).
+        explicit_status = request.query_params.get("status")
+        include_cancelled = request.query_params.get("include_cancelled", "").lower() in ("1", "true", "yes")
+        if not explicit_status and not include_cancelled:
+            qs = qs.exclude(status="cancelled")
         page = self.paginate_queryset(qs)
         if page is not None:
             ser = BillSummarySerializer(page, many=True)
@@ -733,6 +992,7 @@ class BillViewSet(OrganizationFilterMixin, GenericViewSet):
                 lines=v["lines"],
                 tax_amount=v.get("tax_amount"),
                 description=v.get("description", ""),
+                explanation=v.get("explanation", ""),
                 user=request.user,
             )
         except BeakonError as e:
@@ -892,6 +1152,7 @@ class InvoiceViewSet(OrganizationFilterMixin, GenericViewSet):
                 lines=v["lines"],
                 tax_amount=v.get("tax_amount"),
                 description=v.get("description", ""),
+                explanation=v.get("explanation", ""),
                 user=request.user,
             )
         except BeakonError as e:
@@ -1270,6 +1531,365 @@ class AIBillDraftStreamView(APIView):
         return response
 
 
+class OCRExtractStreamView(APIView):
+    """POST /beakon/ocr/extract-stream/  multipart
+
+    Run OCR on a vendor receipt and stream extraction progress, but DO
+    NOT create any record. The final ``done`` event carries the parsed
+    extraction plus a server-side vendor + account match so the
+    frontend can prefill the Create Bill drawer for human review.
+
+    Request: multipart with ``file`` and ``entity``.
+    Events:
+      * ``phase``  — major step. ``{phase: str, pct: int}``
+      * ``token``  — LLM emitted a chunk. ``{n: int}``
+      * ``done``   — success. ``{extraction, matched_vendor, matched_account_id,
+                                 entity_accounting_standard, warnings}``
+      * ``error``  — terminal failure. ``{message: str}``
+
+    The frontend never auto-creates a Bill from this — it pre-fills the
+    drawer and the user clicks Create Draft like any other manual bill.
+    Receipt → Bill is the correct AP-lifecycle anchor (vs. the JE-only
+    flow that ``AIBillDraftStreamView`` provides).
+    """
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        upload = request.FILES.get("file")
+        entity_id = request.data.get("entity")
+        if not upload or not entity_id:
+            return Response({"detail": "file and entity are required"},
+                            status=http.HTTP_400_BAD_REQUEST)
+        try:
+            entity = Entity.objects.get(
+                id=entity_id, organization=request.organization,
+            )
+        except Entity.DoesNotExist:
+            return Response({"detail": "entity not found"},
+                            status=http.HTTP_404_NOT_FOUND)
+
+        # Capture file outside the generator — request.FILES handles don't
+        # survive into the streaming response.
+        file_bytes = upload.read()
+        content_type = upload.content_type or "application/octet-stream"
+        organization = request.organization
+
+        def event_stream():
+            yield _sse({"type": "phase",
+                        "phase": "Reading uploaded file…", "pct": 3})
+
+            extracted = None
+            try:
+                for evt in OCRService.extract_invoice_streaming(
+                    entity=entity,
+                    file_bytes=file_bytes,
+                    content_type=content_type,
+                ):
+                    if evt["type"] == "result":
+                        extracted = evt["data"]
+                    elif evt["type"] == "error":
+                        yield _sse(evt)
+                        return
+                    else:
+                        yield _sse(evt)
+            except Exception as e:
+                yield _sse({"type": "error", "message": f"OCR failed: {e}"})
+                return
+
+            if extracted is None:
+                yield _sse({"type": "error",
+                            "message": "OCR finished without a result."})
+                return
+
+            # ── Server-side vendor + account match ─────────────────────
+            warnings: list[str] = []
+
+            # Vendor: case-insensitive name OR legal_name match. Same
+            # rule the JE-creation path uses — keeps both flows in sync.
+            matched_vendor = None
+            vendor_name = (extracted.get("vendor_name") or "").strip()
+            if vendor_name:
+                from django.db.models import Q
+                v = (
+                    Vendor.objects
+                    .filter(organization=organization, is_active=True)
+                    .filter(
+                        Q(name__iexact=vendor_name)
+                        | Q(legal_name__iexact=vendor_name),
+                    )
+                    .first()
+                )
+                if v is not None:
+                    matched_vendor = {
+                        "id": v.id,
+                        "code": v.code,
+                        "name": v.name,
+                        "default_currency": v.default_currency,
+                        "default_expense_account": v.default_expense_account_id,
+                    }
+                else:
+                    warnings.append(
+                        f"No vendor record matched '{vendor_name}'. "
+                        "Create one in Vendors first, then re-link this draft."
+                    )
+
+            # Account: validate the AI's suggestion against this entity's
+            # COA. If not present (or not on this entity), surface as a
+            # warning and let the user pick in the drawer.
+            matched_account_id = None
+            suggested_account_id = extracted.get("suggested_account_id")
+            if suggested_account_id:
+                from django.db.models import Q
+                acc = (
+                    Account.objects
+                    .filter(
+                        Q(entity=entity) | Q(entity__isnull=True),
+                        organization=organization,
+                        id=suggested_account_id,
+                        is_active=True,
+                    )
+                    .first()
+                )
+                if acc is not None:
+                    matched_account_id = acc.id
+                else:
+                    warnings.append(
+                        "AI-suggested expense account is not on this entity's "
+                        "chart of accounts — please pick one manually."
+                    )
+
+            # Echo low-confidence flags from the extractor so the UI can
+            # tone-down the auto-prefill (e.g. red border on amount fields)
+            if extracted.get("confidence", 1.0) < 0.5:
+                warnings.append(
+                    f"Low overall extraction confidence "
+                    f"({extracted['confidence']:.2f}) — verify all fields."
+                )
+            if extracted.get("confidence_in_account", 1.0) < 0.5:
+                warnings.append(
+                    f"Low confidence in suggested account "
+                    f"({extracted['confidence_in_account']:.2f})."
+                )
+
+            yield _sse({
+                "type": "done",
+                "extraction": {
+                    "vendor_name": extracted.get("vendor_name"),
+                    "invoice_number": extracted.get("invoice_number"),
+                    "invoice_date": extracted.get("invoice_date"),
+                    "due_date": extracted.get("due_date"),
+                    "service_period_start": extracted.get("service_period_start"),
+                    "service_period_end": extracted.get("service_period_end"),
+                    "subtotal": str(extracted.get("subtotal")),
+                    "tax_amount": str(extracted.get("tax_amount")),
+                    "total": str(extracted.get("total")),
+                    "currency": extracted.get("currency"),
+                    "description": extracted.get("description"),
+                    "line_items": [
+                        {"description": li.get("description", ""),
+                         "amount": str(li.get("amount", "0"))}
+                        for li in (extracted.get("line_items") or [])
+                    ],
+                    "suggested_account_reasoning": extracted.get("suggested_account_reasoning"),
+                    "accounting_standard_reasoning": extracted.get("accounting_standard_reasoning"),
+                    "confidence": extracted.get("confidence"),
+                    "confidence_in_account": extracted.get("confidence_in_account"),
+                    "model_used": extracted.get("model_used"),
+                    "mode": extracted.get("mode"),
+                },
+                "matched_vendor": matched_vendor,
+                "matched_account_id": matched_account_id,
+                "entity_accounting_standard": entity.accounting_standard,
+                "warnings": warnings,
+            })
+
+        response = StreamingHttpResponse(
+            event_stream(), content_type="text/event-stream",
+        )
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
+        return response
+
+
+class OCRExtractInvoiceStreamView(APIView):
+    """POST /beakon/ocr/extract-invoice-stream/  multipart
+
+    Run OCR on a CUSTOMER INVOICE this company issued (AR side).
+    Mirror of ``OCRExtractStreamView`` but with two key differences:
+
+      * ``document_type="invoice"`` is passed to OCRService, which swaps
+        the COA filter to revenue accounts (vs. expense for bills) and
+        adapts the prompt to the invoice perspective.
+      * Returns ``matched_customer`` (instead of ``matched_vendor``)
+        and validates the suggested account is a revenue account.
+
+    Use case: importing legacy invoices from a previous billing system,
+    or recording invoices that were sent before Beakon went live.
+    Like the bill flow, the user reviews the prefilled drawer before
+    creating the Invoice draft — receipts never auto-create records.
+    """
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        upload = request.FILES.get("file")
+        entity_id = request.data.get("entity")
+        if not upload or not entity_id:
+            return Response({"detail": "file and entity are required"},
+                            status=http.HTTP_400_BAD_REQUEST)
+        try:
+            entity = Entity.objects.get(
+                id=entity_id, organization=request.organization,
+            )
+        except Entity.DoesNotExist:
+            return Response({"detail": "entity not found"},
+                            status=http.HTTP_404_NOT_FOUND)
+
+        file_bytes = upload.read()
+        content_type = upload.content_type or "application/octet-stream"
+        organization = request.organization
+
+        def event_stream():
+            yield _sse({"type": "phase",
+                        "phase": "Reading uploaded file…", "pct": 3})
+
+            extracted = None
+            try:
+                for evt in OCRService.extract_invoice_streaming(
+                    entity=entity,
+                    file_bytes=file_bytes,
+                    content_type=content_type,
+                    document_type="invoice",
+                ):
+                    if evt["type"] == "result":
+                        extracted = evt["data"]
+                    elif evt["type"] == "error":
+                        yield _sse(evt)
+                        return
+                    else:
+                        yield _sse(evt)
+            except Exception as e:
+                yield _sse({"type": "error", "message": f"OCR failed: {e}"})
+                return
+
+            if extracted is None:
+                yield _sse({"type": "error",
+                            "message": "OCR finished without a result."})
+                return
+
+            warnings: list[str] = []
+
+            # Customer match. The OCR's "vendor_name" field is REUSED
+            # for the customer name in invoice mode (see _SYSTEM_RULES_INVOICE
+            # docstring). Same case-insensitive match logic as vendors.
+            matched_customer = None
+            customer_name = (extracted.get("vendor_name") or "").strip()
+            if customer_name:
+                from django.db.models import Q
+                ci = (
+                    Customer.objects
+                    .filter(organization=organization, is_active=True)
+                    .filter(
+                        Q(name__iexact=customer_name)
+                        | Q(legal_name__iexact=customer_name),
+                    )
+                    .first()
+                )
+                if ci is not None:
+                    matched_customer = {
+                        "id": ci.id,
+                        "code": ci.code,
+                        "name": ci.name,
+                        "default_currency": ci.default_currency,
+                        "default_revenue_account": ci.default_revenue_account_id,
+                    }
+                else:
+                    warnings.append(
+                        f"No customer record matched '{customer_name}'. "
+                        "Create one in Customers first, then re-link this draft."
+                    )
+
+            # Revenue account validation — must be a revenue-type account
+            # on this entity's COA. The OCR pipeline already filtered to
+            # revenue accounts when document_type="invoice", but we
+            # re-validate at the API boundary in case the model
+            # hallucinated an ID outside the prompt's COA list.
+            matched_account_id = None
+            suggested_account_id = extracted.get("suggested_account_id")
+            if suggested_account_id:
+                from django.db.models import Q
+                from beakon_core.constants import ACCOUNT_TYPE_REVENUE
+                acc = (
+                    Account.objects
+                    .filter(
+                        Q(entity=entity) | Q(entity__isnull=True),
+                        organization=organization,
+                        id=suggested_account_id,
+                        is_active=True,
+                        account_type=ACCOUNT_TYPE_REVENUE,
+                    )
+                    .first()
+                )
+                if acc is not None:
+                    matched_account_id = acc.id
+                else:
+                    warnings.append(
+                        "AI-suggested revenue account is not on this "
+                        "entity's chart of accounts — please pick one manually."
+                    )
+
+            if extracted.get("confidence", 1.0) < 0.5:
+                warnings.append(
+                    f"Low overall extraction confidence "
+                    f"({extracted['confidence']:.2f}) — verify all fields."
+                )
+            if extracted.get("confidence_in_account", 1.0) < 0.5:
+                warnings.append(
+                    f"Low confidence in suggested account "
+                    f"({extracted['confidence_in_account']:.2f})."
+                )
+
+            yield _sse({
+                "type": "done",
+                "extraction": {
+                    "customer_name": extracted.get("vendor_name"),
+                    "invoice_number": extracted.get("invoice_number"),
+                    "invoice_date": extracted.get("invoice_date"),
+                    "due_date": extracted.get("due_date"),
+                    "service_period_start": extracted.get("service_period_start"),
+                    "service_period_end": extracted.get("service_period_end"),
+                    "subtotal": str(extracted.get("subtotal")),
+                    "tax_amount": str(extracted.get("tax_amount")),
+                    "total": str(extracted.get("total")),
+                    "currency": extracted.get("currency"),
+                    "description": extracted.get("description"),
+                    "line_items": [
+                        {"description": li.get("description", ""),
+                         "amount": str(li.get("amount", "0"))}
+                        for li in (extracted.get("line_items") or [])
+                    ],
+                    "suggested_account_reasoning": extracted.get("suggested_account_reasoning"),
+                    "accounting_standard_reasoning": extracted.get("accounting_standard_reasoning"),
+                    "confidence": extracted.get("confidence"),
+                    "confidence_in_account": extracted.get("confidence_in_account"),
+                    "model_used": extracted.get("model_used"),
+                    "mode": extracted.get("mode"),
+                },
+                "matched_customer": matched_customer,
+                "matched_account_id": matched_account_id,
+                "entity_accounting_standard": entity.accounting_standard,
+                "warnings": warnings,
+            })
+
+        response = StreamingHttpResponse(
+            event_stream(), content_type="text/event-stream",
+        )
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
+        return response
+
+
 # ── Ask Beakon AI (chat over current ledger state) ────────────────────────
 
 class AnomaliesView(APIView):
@@ -1324,9 +1944,11 @@ class ReportNarrativeView(APIView):
         from datetime import date as dt_date
 
         report_type = (request.data.get("report_type") or "").strip()
-        if report_type not in {"pnl", "bs", "cf", "tb"}:
-            return Response({"detail": "report_type must be pnl | bs | cf | tb"},
-                            status=http.HTTP_400_BAD_REQUEST)
+        if report_type not in {"pnl", "bs", "cf", "tb", "recon"}:
+            return Response(
+                {"detail": "report_type must be pnl | bs | cf | tb | recon"},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
 
         entity = None
         entity_id = request.data.get("entity")
@@ -1344,6 +1966,18 @@ class ReportNarrativeView(APIView):
                                     status=http.HTTP_400_BAD_REQUEST)
                 params["date_from"] = dt_date.fromisoformat(request.data["date_from"])
                 params["date_to"] = dt_date.fromisoformat(request.data["date_to"])
+            elif report_type == "recon":
+                if not request.data.get("as_of") or not request.data.get("bank_account"):
+                    return Response(
+                        {"detail": "as_of and bank_account required for recon"},
+                        status=http.HTTP_400_BAD_REQUEST,
+                    )
+                params["as_of"] = dt_date.fromisoformat(request.data["as_of"])
+                try:
+                    params["bank_account_id"] = int(request.data["bank_account"])
+                except (ValueError, TypeError):
+                    return Response({"detail": "bank_account must be an int"},
+                                    status=http.HTTP_400_BAD_REQUEST)
             else:
                 if not request.data.get("as_of"):
                     return Response({"detail": "as_of required"},
@@ -1641,6 +2275,7 @@ class JournalEntryViewSet(OrganizationFilterMixin, GenericViewSet):
                 entity=entity,
                 date=v["date"],
                 memo=v.get("memo", ""),
+                explanation=v.get("explanation", ""),
                 reference=v.get("reference", ""),
                 currency=v.get("currency") or entity.functional_currency,
                 lines=v["lines"],
@@ -1714,6 +2349,29 @@ class JournalEntryViewSet(OrganizationFilterMixin, GenericViewSet):
             return _beakon_error_response(e)
         return Response(JournalEntryDetailSerializer(entry).data)
 
+    # ── Explanation editor ─────────────────────────────────────────────────
+    # Keep the long-form rationale editable while the JE is mutable
+    # (draft / pending). Once posted/reversed the explanation locks with
+    # the rest of the entry — auditors must see what backed the posting.
+    @action(detail=True, methods=["patch"], url_path="explanation")
+    def update_explanation(self, request, pk=None):
+        entry = self.get_object()
+        if entry.status in bc.JE_LEDGER_IMPACTING:
+            return Response(
+                {"detail": (
+                    f"Explanation is locked on {entry.status} entries. "
+                    "Reverse the entry instead."
+                )},
+                status=http.HTTP_409_CONFLICT,
+            )
+        explanation = request.data.get("explanation", "")
+        if not isinstance(explanation, str):
+            return Response({"detail": "explanation must be a string"},
+                            status=http.HTTP_400_BAD_REQUEST)
+        entry.explanation = explanation
+        entry.save(update_fields=["explanation", "updated_at"])
+        return Response(JournalEntryDetailSerializer(entry).data)
+
     @action(detail=True, methods=["post"])
     def reverse(self, request, pk=None):
         entry = self.get_object()
@@ -1735,6 +2393,209 @@ class JournalEntryViewSet(OrganizationFilterMixin, GenericViewSet):
             },
             status=http.HTTP_201_CREATED,
         )
+
+
+# ── Source-document attachments on a JE ─────────────────────────────────────
+# Two views — one nested under a JE for list+upload, one top-level for
+# single-doc operations (delete + download).
+
+class JournalEntryDocumentListView(APIView):
+    """GET   list non-deleted attachments for a JE.
+    POST  upload a new attachment (multipart). Dedup on SHA-256 means
+          re-uploading the same file returns the existing record.
+    """
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def _resolve_entry(self, request, pk):
+        try:
+            return JournalEntry.objects.get(
+                pk=pk, organization=request.organization,
+            )
+        except JournalEntry.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        entry = self._resolve_entry(request, pk)
+        if entry is None:
+            return Response(status=http.HTTP_404_NOT_FOUND)
+        from beakon_core.services import SourceDocumentService
+        from api.serializers.beakon import SourceDocumentSerializer
+        qs = SourceDocumentService.list_for_entry(entry)
+        return Response(SourceDocumentSerializer(qs, many=True).data)
+
+    def post(self, request, pk):
+        entry = self._resolve_entry(request, pk)
+        if entry is None:
+            return Response(status=http.HTTP_404_NOT_FOUND)
+        f = request.FILES.get("file")
+        if f is None:
+            return Response({"detail": "file required (multipart key 'file')"},
+                            status=http.HTTP_400_BAD_REQUEST)
+        from beakon_core.services import SourceDocumentService
+        from api.serializers.beakon import SourceDocumentSerializer
+        try:
+            doc = SourceDocumentService.attach(
+                journal_entry=entry,
+                file=f,
+                filename=f.name,
+                content_type=f.content_type or "application/octet-stream",
+                user=request.user,
+                description=request.data.get("description") or "",
+            )
+        except BeakonError as e:
+            return _beakon_error_response(e)
+        return Response(SourceDocumentSerializer(doc).data,
+                        status=http.HTTP_201_CREATED)
+
+
+class BillDocumentListView(APIView):
+    """GET   list non-deleted attachments for a Bill (incl. once posted —
+              the FK stays so you can drill from bill → docs).
+    POST  upload a new attachment (multipart, dedup on SHA-256).
+    """
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def _resolve_bill(self, request, pk):
+        try:
+            return Bill.objects.get(pk=pk, organization=request.organization)
+        except Bill.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        bill = self._resolve_bill(request, pk)
+        if bill is None:
+            return Response(status=http.HTTP_404_NOT_FOUND)
+        from beakon_core.services import SourceDocumentService
+        from api.serializers.beakon import SourceDocumentSerializer
+        qs = SourceDocumentService.list_for_bill(bill)
+        return Response(SourceDocumentSerializer(qs, many=True).data)
+
+    def post(self, request, pk):
+        bill = self._resolve_bill(request, pk)
+        if bill is None:
+            return Response(status=http.HTTP_404_NOT_FOUND)
+        f = request.FILES.get("file")
+        if f is None:
+            return Response({"detail": "file required (multipart key 'file')"},
+                            status=http.HTTP_400_BAD_REQUEST)
+        from beakon_core.services import SourceDocumentService
+        from api.serializers.beakon import SourceDocumentSerializer
+        try:
+            doc = SourceDocumentService.attach(
+                bill=bill,
+                file=f,
+                filename=f.name,
+                content_type=f.content_type or "application/octet-stream",
+                user=request.user,
+                description=request.data.get("description") or "",
+            )
+        except BeakonError as e:
+            return _beakon_error_response(e)
+        return Response(SourceDocumentSerializer(doc).data,
+                        status=http.HTTP_201_CREATED)
+
+
+class InvoiceDocumentListView(APIView):
+    """Mirror of BillDocumentListView for the AR side."""
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def _resolve_invoice(self, request, pk):
+        try:
+            return Invoice.objects.get(pk=pk, organization=request.organization)
+        except Invoice.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        invoice = self._resolve_invoice(request, pk)
+        if invoice is None:
+            return Response(status=http.HTTP_404_NOT_FOUND)
+        from beakon_core.services import SourceDocumentService
+        from api.serializers.beakon import SourceDocumentSerializer
+        qs = SourceDocumentService.list_for_invoice(invoice)
+        return Response(SourceDocumentSerializer(qs, many=True).data)
+
+    def post(self, request, pk):
+        invoice = self._resolve_invoice(request, pk)
+        if invoice is None:
+            return Response(status=http.HTTP_404_NOT_FOUND)
+        f = request.FILES.get("file")
+        if f is None:
+            return Response({"detail": "file required (multipart key 'file')"},
+                            status=http.HTTP_400_BAD_REQUEST)
+        from beakon_core.services import SourceDocumentService
+        from api.serializers.beakon import SourceDocumentSerializer
+        try:
+            doc = SourceDocumentService.attach(
+                invoice=invoice,
+                file=f,
+                filename=f.name,
+                content_type=f.content_type or "application/octet-stream",
+                user=request.user,
+                description=request.data.get("description") or "",
+            )
+        except BeakonError as e:
+            return _beakon_error_response(e)
+        return Response(SourceDocumentSerializer(doc).data,
+                        status=http.HTTP_201_CREATED)
+
+
+class SourceDocumentDetailView(APIView):
+    """DELETE soft-deletes the attachment (blocked on posted/reversed JEs).
+    GET serves the file bytes — auth + org scope enforced here, never via
+    the raw FileField path."""
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+
+    def _resolve_doc(self, request, pk):
+        from beakon_core.models.documents import SourceDocument
+        from django.db.models import Q
+        try:
+            return (
+                SourceDocument.objects
+                .select_related("journal_entry", "bill", "invoice")
+                .get(
+                    Q(journal_entry__organization=request.organization)
+                    | Q(bill__organization=request.organization)
+                    | Q(invoice__organization=request.organization),
+                    pk=pk,
+                )
+            )
+        except SourceDocument.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        # Support download via /documents/{id}/?download=1 OR a separate
+        # /documents/{id}/download/ route. We only register the first below.
+        doc = self._resolve_doc(request, pk)
+        if doc is None:
+            return Response(status=http.HTTP_404_NOT_FOUND)
+        if doc.is_deleted:
+            return Response({"detail": "deleted"}, status=http.HTTP_410_GONE)
+        from django.http import FileResponse
+        try:
+            fh = doc.file.open("rb")
+        except FileNotFoundError:
+            return Response({"detail": "file missing on disk"},
+                            status=http.HTTP_410_GONE)
+        return FileResponse(
+            fh,
+            content_type=doc.content_type or "application/octet-stream",
+            as_attachment=True,
+            filename=doc.original_filename,
+        )
+
+    def delete(self, request, pk):
+        doc = self._resolve_doc(request, pk)
+        if doc is None:
+            return Response(status=http.HTTP_404_NOT_FOUND)
+        from beakon_core.services import SourceDocumentService
+        try:
+            SourceDocumentService.soft_delete(doc, user=request.user)
+        except BeakonError as e:
+            return _beakon_error_response(e)
+        return Response(status=http.HTTP_204_NO_CONTENT)
 
 
 # ── Approval actions (read-only, for audit drill-down) ──────────────────────

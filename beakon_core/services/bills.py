@@ -33,7 +33,7 @@ from django.utils import timezone
 from .. import constants as c
 from ..exceptions import InvalidTransition, ValidationError
 from ..models import (
-    Account, Bill, BillLine, Entity, JournalEntry, Vendor,
+    Account, Bill, BillLine, Counterparty, Entity, JournalEntry, Vendor,
 )
 from ..models.ap import (
     BILL_APPROVED, BILL_CANCELLED, BILL_DRAFT, BILL_EDITABLE, BILL_PAID,
@@ -63,6 +63,7 @@ class BillService:
         tax_amount: Optional[Decimal] = None,
         total: Optional[Decimal] = None,
         description: str = "",
+        explanation: str = "",
         user=None,
     ) -> Bill:
         """Create a draft Bill with its lines. ``lines`` is a list of::
@@ -84,13 +85,25 @@ class BillService:
             from datetime import timedelta
             due_date = invoice_date + timedelta(days=vendor.default_payment_terms_days)
 
-        # Compute subtotal from lines if not given
+        # Compute subtotal from lines if not given. When per-line tax_amount /
+        # tax_code is supplied and the caller didn't pass an explicit top-level
+        # tax_amount, sum the per-line tax so totals reconcile automatically.
         line_sum = sum(
             (Decimal(str(ln.get("amount") or 0)) for ln in lines),
             Decimal("0"),
         )
+        line_tax_sum = sum(
+            (
+                Decimal(str(ln["tax_amount"])) if ln.get("tax_amount") is not None
+                else _derive_tax_amount(ln.get("tax_code_id"), Decimal(str(ln.get("amount") or 0)))
+                for ln in lines
+            ),
+            Decimal("0"),
+        )
         subtotal = Decimal(subtotal) if subtotal is not None else line_sum
-        tax_amount = Decimal(tax_amount) if tax_amount is not None else Decimal("0")
+        tax_amount = (
+            Decimal(tax_amount) if tax_amount is not None else line_tax_sum
+        )
         total = Decimal(total) if total is not None else (subtotal + tax_amount)
 
         bill = Bill.objects.create(
@@ -102,6 +115,7 @@ class BillService:
             subtotal=subtotal, tax_amount=tax_amount, total=total,
             status=BILL_DRAFT,
             description=description,
+            explanation=explanation,
             created_by=user,
         )
         for i, ln in enumerate(lines):
@@ -191,32 +205,82 @@ class BillService:
                 f"Entity {bill.entity.code} has no accounts_payable account.",
                 code="AP010",
             )
+        # The vendor IS the counterparty on a bill. If a Counterparty master
+        # row matches the vendor code, stamp every JE line with its FK so the
+        # CP dimension validation rule (workbook 09) is satisfied automatically.
+        cp_id = _resolve_counterparty_for_vendor(bill.vendor, bill.organization_id)
 
-        # Build JE lines: one DR per bill line + one CR on AP for total.
+        # Build JE lines: one DR per bill line + per-tax-code DR (Input VAT)
+        # routed to the linked input_account when set + one CR on AP for total.
+        #
+        # Per-line tax behaviour:
+        #   - Line has tax_code WITH input_account  → DR input_account once per
+        #     code (summed) — recoverable VAT.
+        #   - Line has tax_amount > 0 but NO input_account  → DR the line's own
+        #     expense_account (legacy / non-recoverable / VAT baked into cost).
+        #   - Bill.tax_amount > 0 but no per-line tax  → DR first expense
+        #     account (legacy compatibility for hand-entered totals).
         je_lines = []
-        for ln in bill.lines.select_related("expense_account").order_by("line_order"):
+        line_tax_by_input_account: dict[int, Decimal] = {}
+        non_recoverable_tax: Decimal = Decimal("0")
+        line_level_tax_total: Decimal = Decimal("0")
+
+        for ln in (
+            bill.lines
+            .select_related("expense_account", "tax_code", "tax_code__input_account")
+            .order_by("line_order")
+        ):
             je_lines.append({
                 "account_id": ln.expense_account_id,
                 "debit": ln.amount,
                 "currency": bill.currency,
                 "description": f"{bill.vendor.code} {bill.reference}: {ln.description}",
+                "dimension_counterparty_id": cp_id,
             })
-        # Tax (if any) lands in the same expense bucket unless the user split
-        # it to a separate account — v1 treats tax as inclusive in the lines.
-        # For a simple "+tax on top" bill, DR goes to first line's expense
-        # account; v2 can carry a dedicated tax account.
-        if bill.tax_amount > 0:
+            if ln.tax_amount and ln.tax_amount > 0:
+                line_level_tax_total += ln.tax_amount
+                if ln.tax_code and ln.tax_code.input_account_id:
+                    line_tax_by_input_account.setdefault(
+                        ln.tax_code.input_account_id, Decimal("0"),
+                    )
+                    line_tax_by_input_account[ln.tax_code.input_account_id] += ln.tax_amount
+                else:
+                    # Non-recoverable: lump onto the expense account that bore the cost.
+                    je_lines.append({
+                        "account_id": ln.expense_account_id,
+                        "debit": ln.tax_amount,
+                        "currency": bill.currency,
+                        "description": f"{bill.vendor.code} {bill.reference}: VAT (non-recoverable)",
+                        "dimension_counterparty_id": cp_id,
+                    })
+                    non_recoverable_tax += ln.tax_amount
+
+        # Per-tax-code recoverable Input VAT lines.
+        for input_acct_id, total_for_code in line_tax_by_input_account.items():
+            je_lines.append({
+                "account_id": input_acct_id,
+                "debit": total_for_code,
+                "currency": bill.currency,
+                "description": f"{bill.vendor.code} {bill.reference}: Input VAT",
+                "dimension_counterparty_id": cp_id,
+            })
+
+        # Legacy fallback: hand-entered Bill.tax_amount with no per-line tax data.
+        if bill.tax_amount > 0 and line_level_tax_total == 0:
             je_lines.append({
                 "account_id": bill.lines.first().expense_account_id,
                 "debit": bill.tax_amount,
                 "currency": bill.currency,
                 "description": f"{bill.vendor.code} {bill.reference}: tax",
+                "dimension_counterparty_id": cp_id,
             })
+
         je_lines.append({
             "account_id": ap_account.id,
             "credit": bill.total,
             "currency": bill.currency,
             "description": f"AP to {bill.vendor.code} {bill.reference}",
+            "dimension_counterparty_id": cp_id,
         })
 
         je = JournalService.create_draft(
@@ -227,6 +291,7 @@ class BillService:
             memo=f"Bill {bill.reference} · {bill.vendor.name}" + (
                 f" · {bill.description[:100]}" if bill.description else ""
             ),
+            explanation=bill.explanation,
             reference=bill.bill_number or bill.reference,
             source_type=c.SOURCE_BILL,
             source_id=bill.id,
@@ -239,6 +304,12 @@ class BillService:
         JournalService.submit_for_approval(je, user=None)
         JournalService.approve(je, user=user)
         JournalService.post(je, user=user)
+
+        # Auto-transfer the bill's attachments (uploaded receipt etc.) to
+        # the JE. Same SourceDocument rows; ``bill`` FK stays so the
+        # source can be navigated from either side.
+        from .documents import SourceDocumentService
+        SourceDocumentService.transfer_bill_documents_to_je(bill, je)
 
         bill.status = BILL_APPROVED
         bill.approved_by = user
@@ -270,15 +341,18 @@ class BillService:
                 f"Entity {bill.entity.code} has no accounts_payable account.",
                 code="AP010",
             )
+        cp_id = _resolve_counterparty_for_vendor(bill.vendor, bill.organization_id)
 
         je_lines = [
             {"account_id": ap_account.id, "debit": bill.total,
              "currency": bill.currency,
-             "description": f"Pay {bill.vendor.code} {bill.reference}"},
+             "description": f"Pay {bill.vendor.code} {bill.reference}",
+             "dimension_counterparty_id": cp_id},
             {"account_id": bank_account.id, "credit": bill.total,
              "currency": bill.currency,
              "description": f"Pay {bill.vendor.code} {bill.reference}"
-                             + (f" ref {reference}" if reference else "")},
+                             + (f" ref {reference}" if reference else ""),
+             "dimension_counterparty_id": cp_id},
         ]
         je = JournalService.create_draft(
             organization=bill.organization, entity=bill.entity,
@@ -367,10 +441,40 @@ def _resolve_ap_account(entity: Entity) -> Optional[Account]:
     )
 
 
+def _resolve_counterparty_for_vendor(vendor: Vendor, organization_id) -> Optional[int]:
+    """Return Counterparty.id whose ``counterparty_id`` matches ``vendor.code``.
+
+    On a bill the vendor IS the counterparty; the workbook's CP dimension on
+    AP/expense accounts is satisfied automatically when this match exists.
+    Returns None when no Counterparty row matches — in that case the
+    dimension validator will surface its standard "missing CP" error and the
+    bookkeeper is told to add the counterparty master row first.
+    """
+    if not vendor or not vendor.code:
+        return None
+    cp = (
+        Counterparty.objects
+        .filter(
+            organization_id=organization_id,
+            counterparty_id=vendor.code,
+            active_flag=True,
+        )
+        .only("id")
+        .first()
+    )
+    return cp.id if cp else None
+
+
 def _create_line(bill: Bill, spec: dict, idx: int) -> BillLine:
     amount = Decimal(str(spec.get("amount") or 0))
     qty = Decimal(str(spec.get("quantity") or 1))
     unit_price = Decimal(str(spec.get("unit_price") or (amount / qty if qty else 0)))
+    tax_code_id = spec.get("tax_code_id")
+    tax_amount_raw = spec.get("tax_amount")
+    tax_amount = (
+        Decimal(str(tax_amount_raw)) if tax_amount_raw is not None
+        else _derive_tax_amount(tax_code_id, amount)
+    )
     return BillLine.objects.create(
         bill=bill,
         expense_account_id=spec["expense_account_id"],
@@ -378,5 +482,23 @@ def _create_line(bill: Bill, spec: dict, idx: int) -> BillLine:
         quantity=qty,
         unit_price=unit_price,
         amount=amount,
+        tax_code_id=tax_code_id,
+        tax_amount=tax_amount,
         line_order=spec.get("line_order", idx),
     )
+
+
+def _derive_tax_amount(tax_code_id, base: Decimal) -> Decimal:
+    """Compute tax from rate × base when caller didn't supply tax_amount.
+
+    Imported lazily to avoid the kernel pulling in the tax model at import time.
+    Returns 0 when no tax_code is given.
+    """
+    if not tax_code_id:
+        return Decimal("0")
+    from ..models import TaxCode
+    try:
+        tc = TaxCode.objects.only("rate").get(id=tax_code_id)
+    except TaxCode.DoesNotExist:
+        return Decimal("0")
+    return (Decimal(base) * tc.rate / Decimal("100")).quantize(Decimal("0.01"))

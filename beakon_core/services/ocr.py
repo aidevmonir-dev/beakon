@@ -46,10 +46,31 @@ DEFAULT_CONFIDENCE = 0.0
 # COA token cost. The user can re-categorise to a fixed asset on the
 # draft JE if needed.
 ACCEPTABLE_DEBIT_TYPES = (c.ACCOUNT_TYPE_EXPENSE,)
+# Mirror for AR-side invoices: the suggested account is the credit half
+# of a customer invoice, almost always revenue.
+ACCEPTABLE_CREDIT_TYPES = (c.ACCOUNT_TYPE_REVENUE,)
+
+DOCUMENT_TYPE_BILL = "bill"
+DOCUMENT_TYPE_INVOICE = "invoice"
 # Cap COA entries sent to the model. Family-office orgs can have 100+
 # accounts; sending all of them slows down generation noticeably without
 # improving suggestions much.
 MAX_COA_ENTRIES_IN_PROMPT = 50
+
+
+_PROMPT_HEADER_INVOICE = """You are a precise bookkeeping assistant reading a CUSTOMER INVOICE that this company issued (sent OUT, not received).
+
+Extract structured data, suggest the best REVENUE account to credit
+(not expense — these are amounts billed to a customer), AND explain
+the booking from the perspective of the entity's accounting standard
+so the reviewer learns the underlying rule.
+
+Treat the document the same way as a bill — same fields (vendor_name
+field is REUSED for the CUSTOMER name in this case), same JSON shape,
+same accounting-standard reasoning. The ONLY conceptual difference is
+the perspective: this is money coming IN, so the suggested_account_id
+must be one of the IDs from the chart of accounts below (which has
+been filtered to revenue accounts only)."""
 
 
 _PROMPT_HEADER = """You are a precise bookkeeping assistant reading a vendor bill or receipt.
@@ -63,6 +84,8 @@ You MUST return a single valid JSON object with EXACTLY these keys:
   "invoice_number": string or null,
   "invoice_date": "YYYY-MM-DD" or null,
   "due_date": "YYYY-MM-DD" or null,
+  "service_period_start": "YYYY-MM-DD" or null,
+  "service_period_end": "YYYY-MM-DD" or null,
   "subtotal": string decimal,
   "tax_amount": string decimal,
   "total": string decimal,
@@ -89,6 +112,20 @@ CRITICAL RULES — read carefully:
 6. The currency MUST be a 3-letter ISO code. "$" → "USD", "€" → "EUR", "£" → "GBP".
 7. The suggested_account_id MUST be one of the IDs in the chart of accounts below.
 8. Output ONLY the JSON object. No preamble, no markdown fences, no explanation.
+
+SERVICE PERIOD RULES — critical for revenue recognition / matching:
+- Many invoices cover a SERVICE PERIOD (e.g. "subscription Nov 2026 — Apr 2027",
+  "rent for Q1 2027", "annual licence 2027", "policy period 01/11/26-30/04/27").
+- If a service / coverage / subscription period is visible on the document,
+  extract its start and end as ISO dates in service_period_start /
+  service_period_end. Use the FIRST and LAST day of the period.
+- If only a single month or year is visible (e.g. "March 2027"), set start to
+  the first day and end to the last day of that month/year.
+- If NO service period is visible, set BOTH service_period_start and
+  service_period_end to null. Do not guess.
+- These dates may differ from invoice_date — invoice_date is when the document
+  was issued; service_period_* is when the goods/service is delivered. They
+  drive period accruals and deferrals downstream.
 
 ACCOUNTING-STANDARD REASONING RULES — these protect Thomas's "accountants
 should learn the rule" goal. A wrong citation is worse than no citation:
@@ -119,16 +156,23 @@ Document text fragment: "Acme Corp\\nInvoice #1234\\nDate 2026-04-15\\nWidget x2
 Correct extraction: vendor_name="Acme Corp", invoice_number="1234", invoice_date="2026-04-15", subtotal="50.00", tax_amount="3.50", total="53.50", currency="USD"."""
 
 
-def _coa_for_prompt(entity: Entity) -> list[dict]:
-    """Return a TRIMMED COA for the prompt — expense-only, capped, and
-    with only the fields the model actually needs (id/code/name/subtype).
-    The full account_type field is dropped: it's always 'expense' here."""
+def _coa_for_prompt(
+    entity: Entity, document_type: str = DOCUMENT_TYPE_BILL,
+) -> list[dict]:
+    """Return a TRIMMED COA for the prompt — capped, and with only the
+    fields the model actually needs (id/code/name/subtype). Bills get
+    expense accounts; invoices get revenue accounts."""
+    types = (
+        ACCEPTABLE_CREDIT_TYPES
+        if document_type == DOCUMENT_TYPE_INVOICE
+        else ACCEPTABLE_DEBIT_TYPES
+    )
     rows = (
         Account.objects
         .filter(
             organization=entity.organization,
             is_active=True,
-            account_type__in=ACCEPTABLE_DEBIT_TYPES,
+            account_type__in=types,
         )
         # entity-scoped OR shared
         .filter(Q(entity=entity) | Q(entity__isnull=True))
@@ -139,13 +183,26 @@ def _coa_for_prompt(entity: Entity) -> list[dict]:
     return list(rows)
 
 
-def _build_prompt(entity: Entity, document_text: Optional[str] = None) -> str:
-    coa = _coa_for_prompt(entity)
+def _build_prompt(
+    entity: Entity,
+    document_text: Optional[str] = None,
+    document_type: str = DOCUMENT_TYPE_BILL,
+) -> str:
+    coa = _coa_for_prompt(entity, document_type=document_type)
     standard_label = c.ACCOUNTING_STANDARD_SHORT.get(
         entity.accounting_standard or c.ACCT_STD_IFRS, "IFRS",
     )
+    header = (
+        _PROMPT_HEADER_INVOICE
+        if document_type == DOCUMENT_TYPE_INVOICE
+        else _PROMPT_HEADER
+    )
+    fence_label = (
+        "Customer invoice text:" if document_type == DOCUMENT_TYPE_INVOICE
+        else "Bill / receipt text:"
+    )
     parts = [
-        _PROMPT_HEADER,
+        header,
         "",
         f"Entity functional currency: {entity.functional_currency}",
         f"Entity accounting standard: {standard_label}",
@@ -155,7 +212,7 @@ def _build_prompt(entity: Entity, document_text: Optional[str] = None) -> str:
         json.dumps(coa, indent=2),
     ]
     if document_text:
-        parts += ["", "Bill / receipt text:", "```", document_text, "```"]
+        parts += ["", fence_label, "```", document_text, "```"]
     return "\n".join(parts)
 
 
@@ -336,7 +393,90 @@ def _try_extract_pdf_text(file_bytes: bytes) -> Optional[str]:
     return text
 
 
+# ── Fast OCR path (RapidOCR) ──────────────────────────────────────────────
+# Vision LLMs on CPU/integrated graphics are 60-180s per bill. RapidOCR
+# (ONNX-based, pure Python install) extracts text in 2-5s, then a small
+# text model handles the structured-extraction job. Net ~10x speed-up
+# on the image / scanned-PDF paths with no quality loss on machine-
+# printed receipts. The vision LLM stays as fallback for cases where
+# RapidOCR can't find enough text (badly-scanned, dim, or skewed bills).
+
+_rapidocr_instance = None
+
+
+def _get_rapidocr():
+    """Lazy-load RapidOCR — ONNX models load once and stay in process
+    memory. First call ~1s; subsequent calls reuse the loaded models."""
+    global _rapidocr_instance
+    if _rapidocr_instance is None:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+        except ImportError:
+            return None
+        try:
+            _rapidocr_instance = RapidOCR()
+        except Exception:
+            return None
+    return _rapidocr_instance
+
+
+def _rapidocr_extract_text(image_bytes: bytes) -> Optional[str]:
+    """Run RapidOCR on raw image bytes (PNG/JPG/WebP). Returns the
+    concatenated text, or None if RapidOCR is unavailable, the image
+    can't be parsed, or no text was found."""
+    ocr = _get_rapidocr()
+    if ocr is None:
+        return None
+    try:
+        from PIL import Image
+        import numpy as np
+        img = Image.open(BytesIO(image_bytes)).convert("RGB")
+        result, _ = ocr(np.array(img))
+    except Exception:
+        return None
+    if not result:
+        return None
+    lines = [r[1] for r in result if isinstance(r, (list, tuple)) and len(r) > 1 and r[1]]
+    text = "\n".join(line.strip() for line in lines if line.strip())
+    return text or None
+
+
+def _render_pdf_first_page_to_png_b64(file_bytes: bytes) -> Optional[str]:
+    """Render page 1 of a PDF to a base64-encoded PNG for the vision
+    path. Used when the PDF is image-only (scanned). Returns None if
+    pypdfium2 isn't installed or rendering fails — caller falls back to
+    the OCR007 user-facing error in that case.
+
+    v1: page 1 only. Most bills/receipts are single-page, and multi-page
+    invoices typically carry totals + vendor info on page 1. Multi-page
+    coverage would need a Tesseract step to OCR every page and feed the
+    concatenated text into the TEXT path — out of scope here.
+
+    200 DPI: ~2.78× scale up from PDF's native 72 DPI. Solid for OCR
+    without ballooning the image past what local vision models accept.
+    """
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        return None
+    try:
+        pdf = pdfium.PdfDocument(file_bytes)
+        if len(pdf) == 0:
+            return None
+        bitmap = pdf[0].render(scale=200 / 72)
+        pil = bitmap.to_pil()
+        buf = BytesIO()
+        pil.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return None
+
+
 # ── Public service ────────────────────────────────────────────────────────
+
+def _use_claude() -> bool:
+    return getattr(settings, "OCR_BACKEND", "ollama").lower() == "claude"
+
 
 class OCRService:
     @staticmethod
@@ -345,11 +485,20 @@ class OCRService:
         entity: Entity,
         file_bytes: bytes,
         content_type: str,
+        document_type: str = DOCUMENT_TYPE_BILL,
     ) -> dict:
-        """Run OCR + extraction for a bill/receipt. Returns a dict with
-        the structured fields plus ``model_used`` (which model handled it)
-        and ``mode`` ('text' | 'vision').
+        """Run OCR + extraction for a bill/receipt or customer invoice.
+        ``document_type`` selects which COA slice and prompt to use:
+        "bill" (expense accounts, default) or "invoice" (revenue accounts).
+        Returns a dict with structured fields plus ``model_used`` and
+        ``mode`` ('text' | 'vision' | 'ocr-text').
         """
+        if _use_claude():
+            from .ocr_claude import ClaudeOCRBackend
+            return ClaudeOCRBackend.extract_invoice(
+                entity=entity, file_bytes=file_bytes, content_type=content_type,
+                document_type=document_type,
+            )
         is_image = content_type.startswith("image/")
         is_pdf = content_type == "application/pdf"
         if not (is_image or is_pdf):
@@ -362,7 +511,7 @@ class OCRService:
         if is_pdf:
             text = _try_extract_pdf_text(file_bytes)
             if text:
-                prompt = _build_prompt(entity, document_text=text)
+                prompt = _build_prompt(entity, document_text=text, document_type=document_type)
                 model = settings.OLLAMA_TEXT_MODEL
                 data = _ollama_chat(model=model, prompt=prompt)
                 data["model_used"] = model
@@ -374,18 +523,40 @@ class OCRService:
                 _backfill_amounts_from_text(normalised, text)
                 return normalised
 
-        # Vision path for images and image-only PDFs
+        # Vision path for images and scanned/image-only PDFs.
+        # Resolve raw bytes (for RapidOCR) and base64 (for the LLM-vision
+        # fallback) up front — both paths may be exercised below.
         if is_pdf:
-            # Could render PDF→image with pypdfium2 here. v1 just errors.
-            raise ValidationError(
-                "PDF appears to be scanned/image-only and we don't yet "
-                "render PDFs to images. Convert the PDF to PNG/JPG and "
-                "re-upload, or use a digital (text-embedded) PDF.",
-                code="OCR007",
-            )
-        # Image: send to vision model
-        b64 = base64.b64encode(file_bytes).decode("ascii")
-        prompt = _build_prompt(entity)
+            b64 = _render_pdf_first_page_to_png_b64(file_bytes)
+            if b64 is None:
+                raise ValidationError(
+                    "PDF appears scanned/image-only and rendering to image "
+                    "failed. Make sure pypdfium2 is installed (pip install "
+                    "pypdfium2), or convert the PDF to PNG/JPG and re-upload.",
+                    code="OCR007",
+                )
+            image_bytes_raw = base64.b64decode(b64)
+        else:
+            image_bytes_raw = file_bytes
+            b64 = base64.b64encode(file_bytes).decode("ascii")
+
+        # Fast path: RapidOCR (~2-5s on CPU) → text model. Beats running
+        # the vision LLM directly by ~10x on machines without a GPU,
+        # with negligible quality loss for clean machine-printed bills.
+        ocr_text = _rapidocr_extract_text(image_bytes_raw)
+        if ocr_text and len(ocr_text) >= MIN_PDF_TEXT_CHARS:
+            prompt = _build_prompt(entity, document_text=ocr_text, document_type=document_type)
+            model = settings.OLLAMA_TEXT_MODEL
+            data = _ollama_chat(model=model, prompt=prompt)
+            data["model_used"] = f"{model} + rapidocr"
+            data["mode"] = "ocr-text"
+            normalised = _normalise(data)
+            _backfill_amounts_from_text(normalised, ocr_text)
+            return normalised
+
+        # Fallback: vision LLM. Slower but more robust on poor-quality
+        # scans, handwritten notes, or layouts RapidOCR can't parse.
+        prompt = _build_prompt(entity, document_type=document_type)
         model = settings.OLLAMA_VISION_MODEL
         data = _ollama_chat(model=model, prompt=prompt, image_b64=b64)
         data["model_used"] = model
@@ -398,9 +569,13 @@ class OCRService:
         entity: Entity,
         file_bytes: bytes,
         content_type: str,
+        document_type: str = DOCUMENT_TYPE_BILL,
     ) -> Iterator[dict]:
         """Streaming variant — yields phase + token events while the LLM
         works, then a final ``{"type": "result", "data": <normalised>}``.
+
+        ``document_type`` selects bill (default, expense COA) or invoice
+        (revenue COA, AR perspective).
 
         Events:
             {"type": "phase",  "phase": str, "pct": int}
@@ -408,6 +583,13 @@ class OCRService:
             {"type": "result", "data": dict}    # terminal success
             {"type": "error",  "message": str}  # terminal failure
         """
+        if _use_claude():
+            from .ocr_claude import ClaudeOCRBackend
+            yield from ClaudeOCRBackend.extract_invoice_streaming(
+                entity=entity, file_bytes=file_bytes, content_type=content_type,
+                document_type=document_type,
+            )
+            return
         is_image = content_type.startswith("image/")
         is_pdf = content_type == "application/pdf"
         if not (is_image or is_pdf):
@@ -426,21 +608,56 @@ class OCRService:
             yield {"type": "phase", "phase": "Extracting text from PDF…", "pct": 8}
             text = _try_extract_pdf_text(file_bytes)
             if text:
-                prompt = _build_prompt(entity, document_text=text)
+                prompt = _build_prompt(entity, document_text=text, document_type=document_type)
                 model = settings.OLLAMA_TEXT_MODEL
                 mode = "text"
                 text_for_backfill = text
             else:
-                yield {"type": "error", "message":
-                       "PDF appears scanned/image-only and we don't yet "
-                       "render PDFs to images. Convert to PNG/JPG first."}
-                return
+                yield {"type": "phase",
+                       "phase": "Rendering scanned PDF to image…", "pct": 6}
+                image_b64 = _render_pdf_first_page_to_png_b64(file_bytes)
+                if image_b64 is None:
+                    yield {"type": "error", "message":
+                           "PDF appears scanned and rendering failed. "
+                           "Make sure pypdfium2 is installed, or convert "
+                           "the PDF to PNG/JPG and re-upload."}
+                    return
+                # Fast path: RapidOCR on the rendered page → text model
+                yield {"type": "phase",
+                       "phase": "Running fast OCR (RapidOCR)…", "pct": 8}
+                ocr_text = _rapidocr_extract_text(base64.b64decode(image_b64))
+                if ocr_text and len(ocr_text) >= MIN_PDF_TEXT_CHARS:
+                    prompt = _build_prompt(entity, document_text=ocr_text, document_type=document_type)
+                    model = settings.OLLAMA_TEXT_MODEL
+                    mode = "ocr-text"
+                    text_for_backfill = ocr_text
+                    image_b64 = None
+                else:
+                    yield {"type": "phase",
+                           "phase": "OCR text sparse — falling back to vision model…",
+                           "pct": 10}
+                    prompt = _build_prompt(entity, document_type=document_type)
+                    model = settings.OLLAMA_VISION_MODEL
+                    mode = "vision"
         else:
-            yield {"type": "phase", "phase": "Encoding image for vision model…", "pct": 6}
-            image_b64 = base64.b64encode(file_bytes).decode("ascii")
-            prompt = _build_prompt(entity)
-            model = settings.OLLAMA_VISION_MODEL
-            mode = "vision"
+            # Image upload — try RapidOCR first, then fall back to vision LLM
+            yield {"type": "phase",
+                   "phase": "Running fast OCR (RapidOCR)…", "pct": 6}
+            ocr_text = _rapidocr_extract_text(file_bytes)
+            if ocr_text and len(ocr_text) >= MIN_PDF_TEXT_CHARS:
+                prompt = _build_prompt(entity, document_text=ocr_text, document_type=document_type)
+                model = settings.OLLAMA_TEXT_MODEL
+                mode = "ocr-text"
+                text_for_backfill = ocr_text
+                image_b64 = None
+            else:
+                yield {"type": "phase",
+                       "phase": "OCR text sparse — falling back to vision model…",
+                       "pct": 8}
+                image_b64 = base64.b64encode(file_bytes).decode("ascii")
+                prompt = _build_prompt(entity, document_type=document_type)
+                model = settings.OLLAMA_VISION_MODEL
+                mode = "vision"
 
         yield {"type": "phase",
                "phase": f"Sending to {model} (first call may load the model)…",
@@ -484,6 +701,8 @@ def _normalise(data: dict) -> dict:
         "invoice_number": (data.get("invoice_number") or "")[:100] or None,
         "invoice_date": data.get("invoice_date") or None,
         "due_date": data.get("due_date") or None,
+        "service_period_start": data.get("service_period_start") or None,
+        "service_period_end": data.get("service_period_end") or None,
         "subtotal": _to_decimal(data.get("subtotal")),
         "tax_amount": _to_decimal(data.get("tax_amount")),
         "total": _to_decimal(data.get("total")),
