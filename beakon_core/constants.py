@@ -6,6 +6,26 @@ here when Thomas's accounting spec diverges. Do not hardcode these strings
 elsewhere — import from this module.
 """
 
+# ── Dimension categories ─────────────────────────────────────────────────
+# Thomas's classification of dimension axes per the 2026-05-10 voice memo:
+# financial dimensions drive the GL itself (subaccounts), operational
+# dimensions tag transactions for internal reporting (departments,
+# projects, cost centers), reporting dimensions slice the books for
+# external/management views (regions, channels). The Dimensions hub
+# groups rows by this category.
+DIM_CATEGORY_FINANCIAL = "financial"
+DIM_CATEGORY_OPERATIONAL = "operational"
+DIM_CATEGORY_REPORTING = "reporting"
+DIM_CATEGORY_OTHER = "other"
+
+DIM_CATEGORY_CHOICES = [
+    (DIM_CATEGORY_FINANCIAL, "Financial"),
+    (DIM_CATEGORY_OPERATIONAL, "Operational"),
+    (DIM_CATEGORY_REPORTING, "Reporting"),
+    (DIM_CATEGORY_OTHER, "Other"),
+]
+
+
 # ── Entity types ──────────────────────────────────────────────────────────
 # Family-office context requires more than just "company". Thomas's scope
 # includes trusts and foundations explicitly.
@@ -67,6 +87,31 @@ ACCOUNTING_STANDARD_SHORT = {
     ACCT_STD_UK_GAAP: "UK GAAP",
     ACCT_STD_OTHER:   "Other / local",
 }
+
+
+# ── Chart of Accounts templates ───────────────────────────────────────
+#
+# Per the UI philosophy doc (2026-05-10), the Accounting setup begins
+# with a chart template picker. The four named templates below match
+# the doc verbatim. The slug is stored on `Entity.chart_template`; the
+# actual chart is loaded by existing CoA tooling (import_phase1_coa,
+# /dashboard/coa-definitions). Templates marked `available=False`
+# capture the user's intent today; the chart package ships separately.
+CHART_TEMPLATE_NONE = ""
+CHART_TEMPLATE_SWISS_SME = "swiss_sme"
+CHART_TEMPLATE_LUX_SOPARFI = "lux_soparfi"
+CHART_TEMPLATE_UK_STANDARD = "uk_standard"
+CHART_TEMPLATE_UAE_STANDARD = "uae_standard"
+CHART_TEMPLATE_PHASE1_UNIVERSAL = "phase1_universal"
+
+CHART_TEMPLATE_CHOICES = [
+    (CHART_TEMPLATE_NONE, "Not chosen yet"),
+    (CHART_TEMPLATE_SWISS_SME, "Swiss SME"),
+    (CHART_TEMPLATE_LUX_SOPARFI, "Luxembourg SOPARFI"),
+    (CHART_TEMPLATE_UK_STANDARD, "UK Standard"),
+    (CHART_TEMPLATE_UAE_STANDARD, "UAE Standard"),
+    (CHART_TEMPLATE_PHASE1_UNIVERSAL, "Phase 1 — Universal CoA"),
+]
 
 
 def default_accounting_standard_for_country(country_code: str) -> str:

@@ -102,6 +102,26 @@ class Entity(models.Model):
         default=1,
         help_text="Month (1–12) in which the fiscal year starts.",
     )
+    chart_template = models.CharField(
+        max_length=30,
+        choices=c.CHART_TEMPLATE_CHOICES,
+        default=c.CHART_TEMPLATE_NONE,
+        blank=True,
+        help_text=(
+            "Chart-of-accounts template chosen during Accounting Setup "
+            "(Swiss SME / Luxembourg SOPARFI / UK Standard / UAE Standard / "
+            "Phase 1 Universal). The chart itself is loaded via existing CoA "
+            "tooling; this field captures the entity's intended template."
+        ),
+    )
+    vat_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "Whether this entity registers VAT and posts to VAT control "
+            "accounts. Drives whether tax-code pickers appear on bills, "
+            "invoices and journal entries for this entity."
+        ),
+    )
     four_eyes_posting_required = models.BooleanField(
         default=False,
         help_text=(
@@ -471,6 +491,14 @@ class DimensionType(models.Model):
     name = models.CharField(max_length=120)
     description = models.TextField(blank=True)
     applies_to = models.CharField(max_length=255, blank=True)
+    # Thomas's classification axis (financial / operational / reporting /
+    # other). Drives the grouping in the Dimensions hub. See
+    # constants.DIM_CATEGORY_CHOICES.
+    category = models.CharField(
+        max_length=20,
+        choices=c.DIM_CATEGORY_CHOICES,
+        default=c.DIM_CATEGORY_OTHER,
+    )
     mandatory_flag = models.BooleanField(default=False)
     multi_select_allowed = models.BooleanField(default=False)
     master_data_owner = models.CharField(max_length=120, blank=True)

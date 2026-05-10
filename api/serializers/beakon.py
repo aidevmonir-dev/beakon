@@ -74,7 +74,9 @@ class EntitySerializer(serializers.ModelSerializer):
             "parent", "parent_code",
             "functional_currency", "reporting_currency",
             "country", "accounting_standard",
-            "fiscal_year_start_month", "tax_id", "notes",
+            "fiscal_year_start_month",
+            "chart_template", "vat_enabled",
+            "tax_id", "notes",
             "is_active", "created_at", "updated_at",
         )
         read_only_fields = ("id", "parent_code", "created_at", "updated_at")
@@ -205,7 +207,7 @@ class DimensionTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = DimensionType
         fields = (
-            "id", "code", "name", "description", "applies_to",
+            "id", "code", "name", "description", "applies_to", "category",
             "mandatory_flag", "multi_select_allowed", "master_data_owner",
             "hierarchy_allowed", "active_flag", "notes", "workbook_metadata",
             "value_count", "created_at", "updated_at",
@@ -432,13 +434,14 @@ class BillSummarySerializer(serializers.ModelSerializer):
 
 class BillDetailSerializer(BillSummarySerializer):
     lines = BillLineSerializer(many=True, read_only=True)
+    documents = serializers.SerializerMethodField()
     accrual_journal_entry_number = serializers.SerializerMethodField()
     payment_journal_entry_number = serializers.SerializerMethodField()
     payment_bank_account_code = serializers.SerializerMethodField()
 
     class Meta(BillSummarySerializer.Meta):
         fields = BillSummarySerializer.Meta.fields + (
-            "description", "explanation", "notes", "lines",
+            "description", "explanation", "notes", "lines", "documents",
             "accrual_journal_entry_number", "payment_journal_entry_number",
             "payment_bank_account", "payment_bank_account_code", "payment_reference",
             "submitted_by", "submitted_at",
@@ -459,6 +462,13 @@ class BillDetailSerializer(BillSummarySerializer):
     def get_payment_bank_account_code(self, obj):
         return f"{obj.payment_bank_account.code} · {obj.payment_bank_account.name}" \
             if obj.payment_bank_account_id else None
+
+    def get_documents(self, obj):
+        # Embedded so the bill detail page renders the source-document gallery
+        # next to the rationale text in a single fetch — auditors cross-check
+        # the extracted line items against the original PDF inline.
+        qs = obj.documents.filter(is_deleted=False).order_by("uploaded_at")
+        return SourceDocumentSerializer(qs, many=True).data
 
 
 class BillCreateSerializer(serializers.Serializer):
@@ -548,13 +558,14 @@ class InvoiceSummarySerializer(serializers.ModelSerializer):
 
 class InvoiceDetailSerializer(InvoiceSummarySerializer):
     lines = InvoiceLineSerializer(many=True, read_only=True)
+    documents = serializers.SerializerMethodField()
     issued_journal_entry_number = serializers.SerializerMethodField()
     payment_journal_entry_number = serializers.SerializerMethodField()
     payment_bank_account_code = serializers.SerializerMethodField()
 
     class Meta(InvoiceSummarySerializer.Meta):
         fields = InvoiceSummarySerializer.Meta.fields + (
-            "description", "explanation", "notes", "lines",
+            "description", "explanation", "notes", "lines", "documents",
             "issued_journal_entry_number", "payment_journal_entry_number",
             "payment_bank_account", "payment_bank_account_code", "payment_reference",
             "submitted_by", "submitted_at",
@@ -575,6 +586,10 @@ class InvoiceDetailSerializer(InvoiceSummarySerializer):
     def get_payment_bank_account_code(self, obj):
         return f"{obj.payment_bank_account.code} · {obj.payment_bank_account.name}" \
             if obj.payment_bank_account_id else None
+
+    def get_documents(self, obj):
+        qs = obj.documents.filter(is_deleted=False).order_by("uploaded_at")
+        return SourceDocumentSerializer(qs, many=True).data
 
 
 class InvoiceCreateSerializer(serializers.Serializer):
