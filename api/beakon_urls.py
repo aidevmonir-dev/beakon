@@ -75,6 +75,28 @@ from api.views.beakon_banking import (
     MLBankCategorizerTrainView,
 )
 from api.views.beakon_dashboard import CashTrendView
+from api.views.beakon_bank_feed import (
+    AvaloqBreakListView,
+    AvaloqCoverageView,
+    AvaloqDropDetailView,
+    AvaloqDropListView,
+    AvaloqIngestView,
+    AvaloqReprocessView,
+    AvaloqSimulatePushView,
+)
+from api.views.beakon_billing import (
+    ActivationRequestListView,
+    CurrentSubscriptionView,
+    PlanListView,
+    RequestActivationView,
+    StartSubscriptionView,
+)
+from api.views.beakon_travel import (
+    TripClaimViewSet,
+    TripExpenseViewSet,
+)
+from api.views.beakon_employment import EmployeeViewSet
+from api.views.beakon_documents import DocumentViewSet
 from api.views.beakon_extras import (
     AICoAImportCommitView,
     AICoAImportPreviewView,
@@ -126,6 +148,10 @@ router.register(r"recognition-rules", RecognitionRuleViewSet,
                 basename="beakon-recognition-rule")
 router.register(r"pensions", PensionViewSet, basename="beakon-pension")
 router.register(r"commitments", CommitmentViewSet, basename="beakon-commitment")
+router.register(r"trip-claims", TripClaimViewSet, basename="beakon-trip-claim")
+router.register(r"trip-expenses", TripExpenseViewSet, basename="beakon-trip-expense")
+router.register(r"employees", EmployeeViewSet, basename="beakon-employee")
+router.register(r"documents", DocumentViewSet, basename="beakon-document")
 
 
 urlpatterns = [
@@ -198,6 +224,31 @@ urlpatterns = [
     # Banking feeder
     path("feed-imports/", FeedImportListView.as_view(), name="beakon-feed-imports"),
     path("feed-imports/<int:pk>/", FeedImportDetailView.as_view(), name="beakon-feed-import-detail"),
+    # Avaloq SFTP bank feed (one zip → 5 files → ingest pipeline)
+    path("bank-feed/simulate-push/", AvaloqSimulatePushView.as_view(),
+         name="beakon-bankfeed-simulate"),
+    path("bank-feed/ingest/", AvaloqIngestView.as_view(),
+         name="beakon-bankfeed-ingest"),
+    path("bank-feed/drops/", AvaloqDropListView.as_view(),
+         name="beakon-bankfeed-drops"),
+    path("bank-feed/drops/<int:pk>/", AvaloqDropDetailView.as_view(),
+         name="beakon-bankfeed-drop-detail"),
+    path("bank-feed/breaks/", AvaloqBreakListView.as_view(),
+         name="beakon-bankfeed-breaks"),
+    path("bank-feed/coverage/", AvaloqCoverageView.as_view(),
+         name="beakon-bankfeed-coverage"),
+    path("bank-feed/drops/<int:pk>/reprocess/", AvaloqReprocessView.as_view(),
+         name="beakon-bankfeed-reprocess"),
+    # Commercial layer — pricing catalogue + per-org subscription state
+    path("billing/plans/", PlanListView.as_view(), name="beakon-billing-plans"),
+    path("billing/subscription/", CurrentSubscriptionView.as_view(),
+         name="beakon-billing-subscription"),
+    path("billing/subscription/start/", StartSubscriptionView.as_view(),
+         name="beakon-billing-start"),
+    path("billing/subscription/activate/", RequestActivationView.as_view(),
+         name="beakon-billing-activate"),
+    path("billing/subscription/requests/", ActivationRequestListView.as_view(),
+         name="beakon-billing-requests"),
     # On-device ML bank categoriser (replaces LLM for confident picks)
     path("ml/bank-categorizer/train/", MLBankCategorizerTrainView.as_view(),
          name="beakon-ml-bank-categorizer-train"),

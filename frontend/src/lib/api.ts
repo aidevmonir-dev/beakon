@@ -153,6 +153,40 @@ class ApiClient {
     });
   }
 
+  /** Multipart upload — pass a FormData with file + fields. The browser
+   *  sets Content-Type with the multipart boundary, so we strip the
+   *  default JSON Content-Type header. */
+  async postForm<T>(path: string, form: FormData): Promise<T> {
+    const url = `${API_BASE}${path}`;
+    const headers: Record<string, string> = {};
+    const token = this.getToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const orgId = this.getOrgId();
+    if (orgId) headers["X-Organization-ID"] = orgId;
+
+    const response = await fetch(url, { method: "POST", body: form, headers });
+
+    if (response.status === 401) {
+      // Same refresh dance as request<T>
+      const refreshed = await this.refreshToken();
+      if (refreshed) {
+        headers["Authorization"] = `Bearer ${this.getToken()}`;
+        const retry = await fetch(url, { method: "POST", body: form, headers });
+        if (!retry.ok) throw await this.parseError(retry);
+        return retry.json();
+      }
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("refresh_token");
+        window.location.href = "/login";
+      }
+      throw new Error("Unauthorized");
+    }
+    if (!response.ok) throw await this.parseError(response);
+    if (response.status === 204) return {} as T;
+    return response.json();
+  }
+
   patch<T>(path: string, body?: unknown) {
     return this.request<T>(path, {
       method: "PATCH",

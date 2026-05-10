@@ -54,6 +54,12 @@ INSTALLED_APPS = [
     "beakon_core",
     # Beakon banking feeder (Objective 3)
     "beakon_banking",
+    # Travel & Expense (UI philosophy doc, Phase 1 module)
+    "beakon_travel",
+    # Employment master (UI philosophy doc, Phase 1 module)
+    "beakon_employment",
+    # Documents store (UI philosophy doc, Phase 1 module)
+    "beakon_documents",
     # NOTE: legacy apps (ledger, banking, reconciliation, vendors, customers,
     # documents, reports, dashboards, notifications, ap, ar, ai, tasks) were
     # unregistered on 2026-04-18 per the founder working paper. Their code
@@ -194,6 +200,18 @@ CLAUDE_OCR_MODEL = _cfg("CLAUDE_OCR_MODEL", default="claude-opus-4-7")
 # ---------------------------------------------------------------------------
 ASK_BACKEND = _cfg("ASK_BACKEND", default=OCR_BACKEND).lower()
 CLAUDE_ASK_MODEL = _cfg("CLAUDE_ASK_MODEL", default="claude-haiku-4-5")
+
+# ---------------------------------------------------------------------------
+# Avaloq SFTP bank-feed receiver
+#   AVALOQ_INCOMING_DIR is where the production SFTP daemon lands the
+#   custodian's daily zip. Defaults to <project>/incoming/avaloq/ for
+#   local dev. In production this points at the chrooted SFTP user's
+#   home directory.
+# ---------------------------------------------------------------------------
+AVALOQ_INCOMING_DIR = Path(_cfg(
+    "AVALOQ_INCOMING_DIR",
+    default=str(BASE_DIR / "incoming" / "avaloq"),
+))
 
 # ---------------------------------------------------------------------------
 # Django REST Framework
