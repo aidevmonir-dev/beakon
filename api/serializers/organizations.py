@@ -17,7 +17,9 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "id", "name", "slug", "legal_name", "tax_id",
             "address_line1", "address_line2", "city", "state", "country", "postal_code",
             "phone", "website", "currency", "timezone", "fiscal_year_start",
-            "logo_url", "is_active", "created_at", "updated_at",
+            "logo_url", "is_active",
+            "selected_activities", "ai_infra_consent_at",
+            "created_at", "updated_at",
         )
         read_only_fields = ("id", "slug", "created_at", "updated_at")
 

@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>getBeakon — current left-hand menu (snapshot for Thomas)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Allura&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f8fafc;
+    --panel: #ffffff;
+    --border: #e2e8f0;
+    --border-soft: #eef2f6;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --tiny: #9ca3af;
+    --brand-50: #eff6ff;
+    --brand-500: #2563eb;
+    --brand-700: #1d4ed8;
+    --brand-900: #1e3a8a;
+    --shadow: 4px 0 24px -8px rgba(15, 23, 42, 0.15);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  .page { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; }
+  .rail { position: relative; background: var(--panel); border-right: 1px solid var(--border);
+    box-shadow: var(--shadow); padding: 0; }
+  .brand { height: 64px; display: flex; align-items: center; gap: 12px; padding: 0 18px;
+    border-bottom: 1px solid var(--border-soft); }
+  .brand-mark { width: 32px; height: 32px; flex: 0 0 32px; }
+  .brand-wordmark { height: 24px; }
+  nav { padding: 12px 0 24px; }
+  .section { padding: 0 6px; }
+  .section + .section { margin-top: 16px; }
+  .section-divider { height: 1px; background: var(--border-soft); margin: 8px 12px; }
+  .section-header { display: flex; align-items: center; justify-content: space-between;
+    padding: 0 14px; margin-bottom: 4px; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.12em; color: var(--tiny); }
+  .section-header .chev { width: 14px; height: 14px; color: var(--tiny); }
+  .section-header.collapsed .chev { transform: rotate(-90deg); }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { padding: 1px 0; }
+  .row { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px 0 0;
+    border-radius: 8px; color: #4b5563; text-decoration: none; font-size: 13px; font-weight: 500;
+    position: relative; }
+  .row:hover { background: #f1f5f9; color: #111827; }
+  .row .icon-well { width: 44px; height: 100%; display: flex; align-items: center; justify-content: center;
+    flex: 0 0 44px; }
+  .row .icon-well svg { width: 18px; height: 18px; color: var(--tiny); }
+  .row.active { background: var(--brand-50); color: var(--brand-900); }
+  .row.active .icon-well svg { color: var(--brand-700); }
+  .row.active::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px;
+    width: 2.5px; border-radius: 0 4px 4px 0; background: var(--brand-500); }
+  .label { flex: 1; }
+  .badge { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
+    background: #f1f5f9; padding: 2px 6px; border-radius: 999px; margin-left: 6px; }
+
+  .notes { padding: 32px 40px; max-width: 760px; }
+  .notes h1 { font-size: 22px; margin: 0 0 6px; }
+  .notes h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin: 24px 0 8px; }
+  .notes p, .notes li { font-size: 14px; line-height: 1.55; color: #374151; }
+  .notes code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
+  .notes ul { padding-left: 18px; }
+  .notes .meta { color: var(--muted); font-size: 12.5px; }
+  .legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--brand-500); margin-right: 6px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<div class="page">
+  <aside class="rail" aria-label="Left-hand menu (current state)">
+    <div class="brand">
+      <!-- Beakon icon: navy tile, mint moon top-right, bold white "B" -->
+      <svg class="brand-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Beakon">
+        <defs>
+          <clipPath id="beakon-tile-clip">
+            <rect x="0" y="0" width="48" height="48" rx="11"/>
+          </clipPath>
+        </defs>
+        <g clip-path="url(#beakon-tile-clip)">
+          <rect x="0" y="0" width="48" height="48" rx="11" fill="#234f60"/>
+          <circle cx="44" cy="4" r="11" fill="#3aa888"/>
+        </g>
+        <text x="24" y="36" text-anchor="middle"
+              font-family="'Outfit','Geist','Helvetica Neue',Arial,sans-serif"
+              font-size="34" font-weight="800" fill="#ffffff">B</text>
+      </svg>
+      <!-- "get BEAKON" wordmark: script "get" + bold "BEAKON" in navy -->
+      <svg class="brand-wordmark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 175 48" role="img" aria-label="getBEAKON">
+        <text x="0" y="34"
+              font-family="'Allura','Apple Chancery','Brush Script MT',cursive"
+              font-size="38" font-weight="400" font-style="italic" fill="#234f60">get</text>
+        <text x="46" y="34"
+              font-family="'Outfit','Geist','Helvetica Neue',Arial,sans-serif"
+              font-size="29" font-weight="800" letter-spacing="1.6" fill="#234f60">BEAKON</text>
+      </svg>
+    </div>
+
+    <nav>
+      <!-- Daily — no header, always open -->
+      <div class="section">
+        <ul>
+          <li><a class="row active" href="#"><span class="icon-well"><i data-lucide="layout-dashboard"></i></span><span class="label">Home</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="inbox"></i></span><span class="label">Approvals</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="trending-up"></i></span><span class="label">Financials</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="alert-triangle"></i></span><span class="label">Anomalies</span></a></li>
+        </ul>
+      </div>
+
+      <div class="section-divider"></div>
+
+      <!-- Money -->
+      <div class="section">
+        <div class="section-header"><span>Money</span><i class="chev" data-lucide="chevron-down"></i></div>
+        <ul>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="landmark"></i></span><span class="label">Bank Feed</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="inbox"></i></span><span class="label">Custodian Statements</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="scale"></i></span><span class="label">Reconcile</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="receipt"></i></span><span class="label">Pay Bills</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="file-text"></i></span><span class="label">Invoices</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="send"></i></span><span class="label">Disbursements</span></a></li>
+        </ul>
+      </div>
+
+      <!-- People -->
+      <div class="section">
+        <div class="section-header"><span>People</span><i class="chev" data-lucide="chevron-down"></i></div>
+        <ul>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="truck"></i></span><span class="label">Vendors</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="users"></i></span><span class="label">Customers</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="building-2"></i></span><span class="label">Entities</span></a></li>
+        </ul>
+      </div>
+
+      <!-- Accounting (collapsed by default — shown expanded here so you can see items) -->
+      <div class="section">
+        <div class="section-header"><span>Accounting</span><i class="chev" data-lucide="chevron-down"></i></div>
+        <ul>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="list-tree"></i></span><span class="label">Chart of Accounts</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="notebook-pen"></i></span><span class="label">Journal Entries</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="book-open"></i></span><span class="label">Ledger</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="calendar-check"></i></span><span class="label">Period Close</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="repeat"></i></span><span class="label">Recognition</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="network"></i></span><span class="label">Intercompany</span></a></li>
+        </ul>
+      </div>
+
+      <!-- Settings (collapsed by default — shown expanded for review) -->
+      <div class="section">
+        <div class="section-header"><span>Settings</span><i class="chev" data-lucide="chevron-down"></i></div>
+        <ul>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="tags"></i></span><span class="label">Dimensions</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="percent"></i></span><span class="label">Tax Codes</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="coins"></i></span><span class="label">FX Rates</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="calculator"></i></span><span class="label">VAT Report</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="shield"></i></span><span class="label">Audit Log</span></a></li>
+        </ul>
+      </div>
+
+      <!-- Reference (collapsed by default — shown expanded for review) -->
+      <div class="section">
+        <div class="section-header"><span>Reference</span><i class="chev" data-lucide="chevron-down"></i></div>
+        <ul>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="compass"></i></span><span class="label">Beakon Tour</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="plus-circle"></i></span><span class="label">New organization</span></a></li>
+        </ul>
+      </div>
+
+      <!-- Developer (staff only — collapsed by default) -->
+      <div class="section">
+        <div class="section-header"><span>Developer <span class="badge">staff only</span></span><i class="chev" data-lucide="chevron-down"></i></div>
+        <ul>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="workflow"></i></span><span class="label">Engine workflow</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="map"></i></span><span class="label">Blueprint</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="check-circle-2"></i></span><span class="label">Workbook → DB</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="layers"></i></span><span class="label">CoA Definitions</span></a></li>
+          <li><a class="row" href="#"><span class="icon-well"><i data-lucide="help-circle"></i></span><span class="label">Meeting FAQ</span></a></li>
+        </ul>
+      </div>
+    </nav>
+  </aside>
+
+  <section class="notes">
+    <h1>Current left-hand menu — snapshot</h1>
+    <p class="meta">Snapshot of what's in the sidebar today, ahead of your suggestion.</p>
+
+    <h2>How it behaves</h2>
+    <ul>
+      <li>Collapsed default on desktop is a <strong>56&nbsp;px icon rail</strong>; on hover it expands to <strong>256&nbsp;px</strong> and reveals labels and section headers as an overlay (no layout shift).</li>
+      <li>Top group (Home / Approvals / Financials / Anomalies) is always open and unlabelled — the &ldquo;daily&rdquo; surfaces.</li>
+      <li><strong>Money</strong> and <strong>People</strong> default to open; <strong>Accounting</strong>, <strong>Settings</strong>, <strong>Reference</strong>, <strong>Developer</strong> default to <em>collapsed</em>. They&rsquo;re shown expanded above so every item is visible for your review.</li>
+      <li><strong>Developer</strong> only appears for staff/superuser accounts (gated by <code>is_staff</code> from <code>/auth/me/</code>).</li>
+      <li>A section auto-opens if the current route lives inside it (deep links never land in a closed group).</li>
+    </ul>
+
+    <h2>What's there today</h2>
+    <ul>
+      <li><strong>Daily</strong> &mdash; Home, Approvals, Financials, Anomalies</li>
+      <li><strong>Money</strong> &mdash; Bank Feed, Custodian Statements, Reconcile, Pay Bills, Invoices, Disbursements</li>
+      <li><strong>People</strong> &mdash; Vendors, Customers, Entities</li>
+      <li><strong>Accounting</strong> &mdash; Chart of Accounts, Journal Entries, Ledger, Period Close, Recognition, Intercompany</li>
+      <li><strong>Settings</strong> &mdash; Dimensions, Tax Codes, FX Rates, VAT Report, Audit Log</li>
+      <li><strong>Reference</strong> &mdash; Beakon Tour, New organization</li>
+      <li><strong>Developer</strong> (staff only) &mdash; Engine workflow, Blueprint, Workbook&nbsp;&rarr;&nbsp;DB, CoA Definitions, Meeting FAQ</li>
+    </ul>
+
+    <p class="meta"><span class="legend-dot"></span>The highlighted &ldquo;Home&rdquo; row above is just a sample active state &mdash; it is not pinned.</p>
+  </section>
+</div>
+
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script>lucide.createIcons();</script>
+</body>
+</html>

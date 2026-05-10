@@ -27,6 +27,14 @@ class Organization(models.Model):
     logo_url = models.URLField(max_length=500, blank=True)
     is_active = models.BooleanField(default=True)
 
+    # Onboarding (per the UI philosophy doc, 2026-05-10): activities the
+    # client picked drives which modules render. Compliance modules
+    # activate progressively when fiduciary/trustee/regulated activities
+    # are present. `ai_infra_consent_at` is platform consent (AWS,
+    # Bedrock, Claude, document analysis) — distinct from compliance.
+    selected_activities = models.JSONField(default=list, blank=True)
+    ai_infra_consent_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

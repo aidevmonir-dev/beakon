@@ -1,395 +1,247 @@
 "use client";
 
-/* Beakon home — customizable, Digits-style dashboard.
+/* Home — operational workspace launcher (Phase 1).
  *
- * The page is a thin frame: it loads shared data once, reads the user's
- * saved layout from localStorage, and renders an ordered list of
- * widgets via <WidgetSwitch>. An "Edit dashboard" toggle reveals a
- * dashed-ring chrome around each widget with reorder + remove buttons,
- * plus a "+ Add widget" button that opens the catalog picker.
+ * Per the UI philosophy doc (2026-05-10): the home screen is NOT a
+ * dashboard. It is the launcher that opens into the modules the client
+ * activated during onboarding.
  *
- * To add a new widget kind:
- *   1) export a component from components/dashboard/widgets.tsx
- *   2) add a WidgetType + catalog entry in lib/dashboard-layout.ts
- *   3) wire it into <WidgetSwitch> below
+ * Tile order follows the client onboarding journey:
+ *   1. Structure         — gated by `structure_management`
+ *   2. Accounting        — gated by `accounting_finance`
+ *   3. Travel Expense    — gated by `travel_expense`
+ *   4. Employment        — gated by `employment`
+ *   5. Documents         — gated by `document_management`
+ *   6. Wealth Management — gated by `wealth_oversight`
+ *   7. Dashboard         — always visible (workspace metrics)
+ *   8. Settings          — always visible
+ *
+ * The customizable Digits-style widget dashboard moved to
+ * /dashboard/overview, behind the "Dashboard" tile.
  */
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 import {
-  CalendarCheck, Maximize2, Minimize2, NotebookPen, Pencil, Plus, RotateCcw, Save,
+  ArrowRight, Building2, FileText, Plane, Settings as SettingsIcon,
+  Sparkles, TrendingUp, Users, Wallet, Workflow,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import Link from "next/link";
-import { PageHeader } from "@/components/ui/page-header";
-import {
-  type WidgetInstance, type WidgetType,
-  DEFAULT_LAYOUT, loadLayout, newWidgetId, resetLayout, saveLayout,
-  WIDGET_CATALOG,
-} from "@/lib/dashboard-layout";
-import { WidgetShell } from "@/components/dashboard/widget-shell";
-import { AddWidgetPicker } from "@/components/dashboard/widget-picker";
-import {
-  AISummaryWidget,
-  ApprovalInboxWidget,
-  CashPositionWidget,
-  EntityBalancesWidget,
-  KPIStripWidget,
-  QuickActionsWidget,
-  RecentActivityWidget,
-  type BankAccount, type Entity, type JESummary,
-} from "@/components/dashboard/widgets";
-import {
-  AnomaliesWidget,
-  APAgingWidget,
-  ARAgingWidget,
-  BankListWidget,
-  PeriodCloseWidget,
-  PLSnapshotWidget,
-  UnmatchedBankWidget,
-} from "@/components/dashboard/accounting-widgets";
+import { withOrigin } from "@/lib/workflow-back";
+
+
+type ActivitySlug =
+  | "structure_management"
+  | "accounting_finance"
+  | "travel_expense"
+  | "employment"
+  | "wealth_oversight"
+  | "document_management";
+
+
+interface OrgPayload {
+  id: number;
+  name: string;
+  currency?: string;
+  selected_activities?: ActivitySlug[];
+}
+
+
+interface Tile {
+  slug: string;
+  title: string;
+  body: string;
+  href: string;
+  icon: React.ComponentType<{ className?: string }>;
+  /** If set, only render when this activity is in `selected_activities`. */
+  activity?: ActivitySlug;
+  accent?: "brand" | "mint" | "neutral";
+}
+
+
+const TILES: Tile[] = [
+  {
+    slug: "structure",
+    title: "Structure",
+    body: "Entities, ownership and the relationships between them.",
+    href: "/dashboard/structure",
+    icon: Building2,
+    activity: "structure_management",
+    accent: "brand",
+  },
+  {
+    slug: "accounting",
+    title: "Accounting",
+    body: "Books, journal entries, ledger and period close.",
+    href: "/dashboard/journal-entries",
+    icon: TrendingUp,
+    activity: "accounting_finance",
+    accent: "brand",
+  },
+  {
+    slug: "travel",
+    title: "Travel Expense",
+    body: "Trips, claims, receipts, approvals and reimbursements.",
+    href: "/dashboard/travel",
+    icon: Plane,
+    activity: "travel_expense",
+    accent: "mint",
+  },
+  {
+    slug: "employment",
+    title: "Employment",
+    body: "Employees, contracts and payroll feeds.",
+    href: "/dashboard/employment",
+    icon: Users,
+    activity: "employment",
+    accent: "mint",
+  },
+  {
+    slug: "documents",
+    title: "Documents",
+    body: "Contracts, statements and supporting evidence.",
+    href: "/dashboard/documents",
+    icon: FileText,
+    activity: "document_management",
+    accent: "mint",
+  },
+  {
+    slug: "wealth",
+    title: "Wealth Management",
+    body: "Portfolios, custodian feeds and consolidated performance.",
+    href: "/dashboard/bank-feed",
+    icon: Wallet,
+    activity: "wealth_oversight",
+    accent: "brand",
+  },
+  {
+    slug: "dashboard",
+    title: "Dashboard",
+    body: "Today's cash position, approvals queue and headline KPIs.",
+    href: "/dashboard/overview",
+    icon: Workflow,
+    accent: "neutral",
+  },
+  {
+    slug: "settings",
+    title: "Settings",
+    body: "Currencies, taxes, dimensions, audit log and team.",
+    href: "/dashboard/settings",
+    icon: SettingsIcon,
+    accent: "neutral",
+  },
+];
 
 
 export default function HomePage() {
-  /* ── Shared data ─────────────────────────────────────────────── */
-  const [entities, setEntities] = useState<Entity[]>([]);
-  const [banks, setBanks] = useState<BankAccount[]>([]);
-  const [pending, setPending] = useState<JESummary[]>([]);
-  const [recent, setRecent] = useState<JESummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [activities, setActivities] = useState<ActivitySlug[] | null>(null);
+  const [orgName, setOrgName] = useState<string>("");
+  const [beakonCurrency, setBeakonCurrency] = useState<string>("");
 
   useEffect(() => {
-    const norm = <T,>(d: { results: T[] } | T[] | undefined): T[] =>
-      Array.isArray(d) ? d : (d?.results ?? []);
-    Promise.all([
-      api.get<{ results: Entity[] } | Entity[]>("/beakon/entities/", { is_active: "true" })
-        .then(norm).catch(() => [] as Entity[]),
-      api.get<{ results: BankAccount[] } | BankAccount[]>("/beakon/bank-accounts/", {
-        is_active: "true", page_size: "100",
-      }).then(norm).catch(() => [] as BankAccount[]),
-      api.get<{ entries: JESummary[] }>("/beakon/reports/journal-listing/", {
-        status: "pending_approval", limit: "20",
-      }).then((d) => d.entries || []).catch(() => [] as JESummary[]),
-      api.get<{ entries: JESummary[] }>("/beakon/reports/journal-listing/", {
-        status: "posted", limit: "10",
-      }).then((d) => d.entries || []).catch(() => [] as JESummary[]),
-    ]).then(([e, b, p, r]) => {
-      setEntities(e); setBanks(b); setPending(p); setRecent(r);
-    }).finally(() => setLoading(false));
+    const orgId = typeof window !== "undefined"
+      ? localStorage.getItem("organization_id")
+      : null;
+    if (!orgId) return;
+    api.get<OrgPayload>(`/organizations/${orgId}/`)
+      .then((org) => {
+        setActivities((org.selected_activities ?? []) as ActivitySlug[]);
+        setOrgName(org.name || "");
+        setBeakonCurrency(org.currency || "");
+      })
+      .catch(() => setActivities([]));
   }, []);
 
-  /* ── Compact toggle (round figures + K/M/B notation) ─────────── */
-  const [compact, setCompact] = useState(false);
-  useEffect(() => {
-    try {
-      setCompact(localStorage.getItem("beakon:dashboard:compact") === "1");
-    } catch { /* ignore */ }
-  }, []);
-  useEffect(() => {
-    try {
-      localStorage.setItem("beakon:dashboard:compact", compact ? "1" : "0");
-    } catch { /* ignore */ }
-  }, [compact]);
-
-  /* ── Scope: entity-level vs group-wide ───────────────────────── */
-  const [scopeEntityId, setScopeEntityId] = useState<number | null>(null);
-  // Reset scope if the selected entity is no longer in the active list.
-  useEffect(() => {
-    if (scopeEntityId !== null && !entities.some((e) => e.id === scopeEntityId)) {
-      setScopeEntityId(null);
-    }
-  }, [entities, scopeEntityId]);
-
-  /* ── Layout state ────────────────────────────────────────────── */
-  const [layout, setLayout] = useState<WidgetInstance[]>(DEFAULT_LAYOUT);
-  const [editMode, setEditMode] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [hydrated, setHydrated] = useState(false);
-
-  // Hydrate from localStorage on first render to avoid a server/client
-  // mismatch (Next.js hydrates with the SSR'd default).
-  useEffect(() => {
-    setLayout(loadLayout());
-    setHydrated(true);
-  }, []);
-
-  // Persist any layout change.
-  useEffect(() => {
-    if (hydrated) saveLayout(layout);
-  }, [layout, hydrated]);
-
-  const inUse = useMemo(
-    () => new Set(layout.map((w) => w.type)),
-    [layout],
+  // Until we know the activity set, show all tiles. This keeps the
+  // launcher useful for legacy orgs that pre-date Activity Selection.
+  const visible = TILES.filter((t) =>
+    !t.activity || activities === null || activities.includes(t.activity),
   );
 
-  const moveUp = (idx: number) => setLayout((prev) => {
-    if (idx <= 0) return prev;
-    const next = prev.slice();
-    [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
-    return next;
-  });
-
-  const moveDown = (idx: number) => setLayout((prev) => {
-    if (idx >= prev.length - 1) return prev;
-    const next = prev.slice();
-    [next[idx + 1], next[idx]] = [next[idx], next[idx + 1]];
-    return next;
-  });
-
-  const remove = (idx: number) => setLayout((prev) => prev.filter((_, i) => i !== idx));
-
-  const addWidget = (type: WidgetType) => {
-    setLayout((prev) => [...prev, { id: newWidgetId(type), type }]);
-    setPickerOpen(false);
-  };
-
-  const today = new Date().toLocaleDateString("en-US", {
-    weekday: "long", month: "short", day: "numeric", year: "numeric",
-  });
-
-  // Filter shared data by entity when a scope is set, so the cash /
-  // KPI / inbox widgets honour the scope picker too.
-  const scopedBanks = useMemo(() => {
-    if (scopeEntityId === null) return banks;
-    const ent = entities.find((e) => e.id === scopeEntityId);
-    return ent ? banks.filter((b) => b.entity_code === ent.code) : banks;
-  }, [banks, entities, scopeEntityId]);
-
-  const scopedEntities = useMemo(() => {
-    if (scopeEntityId === null) return entities;
-    return entities.filter((e) => e.id === scopeEntityId);
-  }, [entities, scopeEntityId]);
-
-  const scopedPending = useMemo(() => {
-    if (scopeEntityId === null) return pending;
-    const ent = entities.find((e) => e.id === scopeEntityId);
-    return ent ? pending.filter((j) => j.entity_code === ent.code) : pending;
-  }, [pending, entities, scopeEntityId]);
-
-  const scopedRecent = useMemo(() => {
-    if (scopeEntityId === null) return recent;
-    const ent = entities.find((e) => e.id === scopeEntityId);
-    return ent ? recent.filter((j) => j.entity_code === ent.code) : recent;
-  }, [recent, entities, scopeEntityId]);
-
-  const dataProps = {
-    loading,
-    entities: scopedEntities,
-    banks: scopedBanks,
-    pending: scopedPending,
-    recent: scopedRecent,
-    scopeEntityId,
-    compact,
-  };
+  const greeting = greetingFor(new Date());
 
   return (
-    <div>
-      <PageHeader
-        title="Home"
-        description={
-          editMode
-            ? "Reorder, remove, or add widgets. Layout is saved to your browser. Click Done when finished."
-            : "Today's cash position, what's waiting on you, and what just posted. Customize your layout with Edit dashboard."
-        }
-        context={
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="inline-flex items-center gap-2 rounded-full border border-canvas-200 bg-white/80 px-2.5 py-1 text-xs text-gray-600">
-              <CalendarCheck className="h-3.5 w-3.5 text-brand-600" />
-              <span className="font-medium text-gray-800">{today}</span>
-            </div>
-            <div className="inline-flex items-center gap-1.5 rounded-full border border-canvas-200 bg-white/80 px-2.5 py-1 text-xs text-gray-600">
-              <span className="text-gray-500">Scope:</span>
-              <select
-                value={scopeEntityId ?? ""}
-                onChange={(e) => setScopeEntityId(e.target.value ? Number(e.target.value) : null)}
-                className="bg-transparent text-xs font-medium text-gray-800 focus:outline-none"
+    <div className="-m-3 sm:-m-5 min-h-[calc(100vh-7rem)] bg-gradient-to-b from-canvas-100 via-canvas-50 to-white px-3 py-8 sm:px-8 sm:py-12">
+      <div className="mx-auto w-full max-w-6xl">
+        <div className="mb-8 sm:mb-10">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-3 py-1 text-[11px] font-medium text-brand-700 ring-1 ring-brand-100">
+              <Sparkles className="h-3 w-3" />
+              {orgName ? `${orgName} workspace` : "Your workspace"}
+            </span>
+            {beakonCurrency && (
+              <Link
+                href={withOrigin("/dashboard/settings/organization", "/dashboard")}
+                title="Beakon Currency — your personal view currency for overall reports. Click to change."
+                className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-[11px] font-medium text-gray-700 ring-1 ring-canvas-200 hover:ring-brand-200 transition"
               >
-                <option value="">All entities</option>
-                {entities.map((e) => (
-                  <option key={e.id} value={e.id}>{e.code} · {e.name}</option>
-                ))}
-              </select>
-            </div>
-            <button
-              type="button"
-              onClick={() => setCompact((v) => !v)}
-              className={
-                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors " +
-                (compact
-                  ? "border-brand-200 bg-brand-50 text-brand-800"
-                  : "border-canvas-200 bg-white/80 text-gray-600 hover:text-gray-900")
-              }
-              title={compact ? "Showing K / M / B — click to switch back to exact 2dp" : "Switch to K / M / B notation for executive viewing"}
-            >
-              {compact ? <Maximize2 className="w-3.5 h-3.5" /> : <Minimize2 className="w-3.5 h-3.5" />}
-              {compact ? "Compact" : "Exact"}
-            </button>
-          </div>
-        }
-        actions={
-          <div className="flex items-center gap-2">
-            {editMode ? (
-              <>
-                <button
-                  onClick={() => setPickerOpen(true)}
-                  className="btn-secondary text-sm"
-                >
-                  <Plus className="w-4 h-4 mr-1.5" /> Add widget
-                </button>
-                <button
-                  onClick={() => {
-                    if (confirm("Reset your dashboard to the default layout?")) {
-                      setLayout(resetLayout());
-                    }
-                  }}
-                  className="btn-secondary text-sm"
-                  title="Reset to default layout"
-                >
-                  <RotateCcw className="w-4 h-4 mr-1.5" /> Reset
-                </button>
-                <button
-                  onClick={() => setEditMode(false)}
-                  className="btn-primary text-sm"
-                >
-                  <Save className="w-4 h-4 mr-1.5" /> Done
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  onClick={() => setEditMode(true)}
-                  className="btn-secondary text-sm"
-                  title="Customize the layout"
-                >
-                  <Pencil className="w-4 h-4 mr-1.5" /> Edit dashboard
-                </button>
-                <Link href="/dashboard/journal-entries/new" className="btn-primary text-sm">
-                  <NotebookPen className="w-4 h-4 mr-1.5" /> New journal entry
-                </Link>
-              </>
+                <span className="text-gray-400">Beakon Currency:</span>
+                <span className="font-mono text-brand-700">{beakonCurrency}</span>
+              </Link>
             )}
           </div>
-        }
-      />
+          <h1 className="mt-3 text-2xl sm:text-3xl font-semibold tracking-[-0.01em] text-gray-900">
+            {greeting}.
+          </h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Open a module to start working — or add more from Settings later.
+          </p>
+        </div>
 
-      <div className={editMode ? "mt-7 space-y-7" : "mt-5 space-y-5"}>
-        {(() => {
-          // Pair up adjacent half-span widgets (AR+AP, inbox+recent) so
-          // they sit side-by-side on lg screens. Also handles the case
-          // where only one is present (it gets the full width).
-          const items: React.ReactNode[] = [];
-          for (let i = 0; i < layout.length; i++) {
-            const a = layout[i];
-            const b = layout[i + 1];
-            const aEntry = WIDGET_CATALOG.find((c) => c.type === a.type);
-            const bEntry = b ? WIDGET_CATALOG.find((c) => c.type === b.type) : null;
-            const pairAB =
-              !editMode && b && aEntry?.span === "half" && bEntry?.span === "half";
-            if (pairAB && b) {
-              items.push(
-                <div key={`${a.id}+${b.id}`} className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                  <WidgetSwitch widget={a} {...dataProps} />
-                  <WidgetSwitch widget={b} {...dataProps} />
-                </div>,
-              );
-              i++; // consumed b
-            } else {
-              items.push(
-                <WidgetShell
-                  key={a.id}
-                  editMode={editMode}
-                  isFirst={i === 0}
-                  isLast={i === layout.length - 1}
-                  label={aEntry?.name ?? a.type}
-                  onMoveUp={() => moveUp(i)}
-                  onMoveDown={() => moveDown(i)}
-                  onRemove={() => remove(i)}
-                >
-                  <WidgetSwitch widget={a} {...dataProps} />
-                </WidgetShell>,
-              );
-            }
-          }
-          return items;
-        })()}
+        <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {visible.map((tile) => (
+            <li key={tile.slug}>
+              <TileCard tile={tile} />
+            </li>
+          ))}
+        </ul>
 
-        {layout.length === 0 && (
-          <div className="rounded-2xl border border-dashed border-canvas-300 bg-canvas-50/40 p-10 text-center">
-            <p className="text-sm text-gray-600">Your dashboard is empty.</p>
-            <button
-              onClick={() => setPickerOpen(true)}
-              className="btn-primary mt-3 text-sm"
-            >
-              <Plus className="w-4 h-4 mr-1.5" /> Add a widget
-            </button>
-          </div>
-        )}
-
-        {editMode && layout.length > 0 && (
-          <button
-            onClick={() => setPickerOpen(true)}
-            className="w-full rounded-2xl border-2 border-dashed border-canvas-300 hover:border-brand-300 bg-white/40 hover:bg-brand-50/40 transition-all py-6 flex items-center justify-center gap-2 text-sm font-medium text-gray-600 hover:text-brand-800"
-          >
-            <Plus className="w-4 h-4" />
-            Add a widget here
-          </button>
+        {activities && activities.length === 0 && (
+          <p className="mt-8 text-center text-[12.5px] text-gray-500">
+            You haven't activated any modules yet. The base tiles
+            (Dashboard &amp; Settings) are always available.
+          </p>
         )}
       </div>
-
-      {pickerOpen && (
-        <AddWidgetPicker
-          inUse={inUse}
-          onAdd={addWidget}
-          onClose={() => setPickerOpen(false)}
-        />
-      )}
     </div>
   );
 }
 
 
-/* Switch component — picks the right widget for a given instance. */
-function WidgetSwitch({
-  widget, loading, entities, banks, pending, recent, scopeEntityId, compact,
-}: {
-  widget: WidgetInstance;
-  loading: boolean;
-  entities: Entity[];
-  banks: BankAccount[];
-  pending: JESummary[];
-  recent: JESummary[];
-  scopeEntityId: number | null;
-  compact: boolean;
-}) {
-  switch (widget.type) {
-    case "cash-position":
-      return <CashPositionWidget loading={loading} entities={entities} banks={banks} compact={compact} />;
-    case "kpi-strip":
-      return <KPIStripWidget loading={loading} entities={entities} banks={banks} pending={pending} recent={recent} />;
-    case "pnl-snapshot":
-      return <PLSnapshotWidget entityId={scopeEntityId} compact={compact} />;
-    case "ar-aging":
-      return <ARAgingWidget entityId={scopeEntityId} compact={compact} />;
-    case "ap-aging":
-      return <APAgingWidget entityId={scopeEntityId} compact={compact} />;
-    case "bank-list":
-      return <BankListWidget banks={banks} loading={loading} compact={compact} />;
-    case "unmatched-bank":
-      return <UnmatchedBankWidget entityId={scopeEntityId} />;
-    case "period-close":
-      return <PeriodCloseWidget entityId={scopeEntityId} />;
-    case "anomalies":
-      return <AnomaliesWidget entityId={scopeEntityId} />;
-    case "approval-inbox":
-      return <ApprovalInboxWidget loading={loading} pending={pending} />;
-    case "recent-activity":
-      return <RecentActivityWidget loading={loading} recent={recent} />;
-    case "quick-actions":
-      return <QuickActionsWidget />;
-    case "entity-balances":
-      return <EntityBalancesWidget loading={loading} entities={entities} banks={banks} compact={compact} />;
-    case "ai-summary":
-      return <AISummaryWidget />;
-    default:
-      return null;
-  }
+function TileCard({ tile }: { tile: Tile }) {
+  const Icon = tile.icon;
+  const accent =
+    tile.accent === "brand"
+      ? { ring: "ring-brand-100", well: "bg-brand-50 text-brand-700", arrow: "text-brand-700" }
+      : tile.accent === "mint"
+        ? { ring: "ring-mint-100", well: "bg-mint-50 text-mint-700", arrow: "text-mint-700" }
+        : { ring: "ring-canvas-200", well: "bg-canvas-100 text-gray-600", arrow: "text-gray-700" };
+
+  return (
+    <Link
+      href={tile.href}
+      className={
+        "group relative flex h-full flex-col rounded-2xl border border-canvas-200/70 bg-white p-5 ring-1 transition " +
+        accent.ring +
+        " hover:-translate-y-0.5 hover:shadow-[0_12px_30px_-12px_rgba(15,23,42,0.18)]"
+      }
+    >
+      <div className={"mb-4 inline-flex h-10 w-10 items-center justify-center rounded-xl " + accent.well}>
+        <Icon className="h-5 w-5" />
+      </div>
+      <div className="text-[15px] font-semibold text-gray-900">{tile.title}</div>
+      <p className="mt-1.5 flex-1 text-[13px] leading-relaxed text-gray-600">{tile.body}</p>
+      <div className={"mt-4 inline-flex items-center gap-1.5 text-[13px] font-medium " + accent.arrow}>
+        Open
+        <ArrowRight className="h-3.5 w-3.5 transition group-hover:translate-x-0.5" />
+      </div>
+    </Link>
+  );
+}
+
+
+function greetingFor(d: Date): string {
+  const h = d.getHours();
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
 }
