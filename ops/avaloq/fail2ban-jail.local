@@ -1,0 +1,24 @@
+# fail2ban jail for the SFTP receiver — drop /etc/fail2ban/jail.d/beakon-avaloq.local
+#
+# Defence-in-depth alongside the iptables IP allowlist. The allowlist blocks
+# unknown sources at the kernel; this jail catches the rare case of a bank
+# IP being compromised or a credential leak, where the source IS allowed
+# but the auth attempts are failing.
+#
+# After installing this file:
+#   systemctl restart fail2ban
+#   fail2ban-client status beakon-avaloq
+
+[beakon-avaloq]
+enabled  = true
+port     = 22
+filter   = sshd
+logpath  = /var/log/auth.log
+# Three failures in a 10-minute window → 1-hour ban. Tuned tight because
+# legitimate users (the bank's IT) have one valid key and should never miss.
+maxretry = 3
+findtime = 600
+bantime  = 3600
+# Whitelist the bank IPs explicitly — they should never get banned. If
+# they do trigger maxretry we want to investigate, not silently block.
+ignoreip = 127.0.0.1/8 194.38.173.1 194.38.173.2 194.38.173.3

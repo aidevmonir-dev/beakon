@@ -1,0 +1,45 @@
+# Hardened SFTP-only Match block for the Avaloq bank-feed user.
+#
+# Append this block at the END of /etc/ssh/sshd_config (after any
+# global directives — `Match` blocks must come last). Test with
+# `sshd -t` before reloading.
+#
+# Reload (not restart) to apply: `systemctl reload sshd`
+#
+# Assumes:
+#   - dedicated POSIX user `avaloq-gva` (one user per bank — see
+#     setup_avaloq_sftp_user.sh)
+#   - the user's home is /home/avaloq-gva and owned by root:root
+#     with mode 0755 (sshd chroot requirement)
+#   - drop directory /home/avaloq-gva/incoming is owned by
+#     avaloq-gva and writable only by them
+#
+# Bank source IP allowlist is enforced separately at the firewall
+# (ufw/iptables/nftables) — see firewall_rules.sh. Listing them again
+# here as a defence-in-depth check is intentional.
+
+Match User avaloq-gva
+    # SFTP only — no shell, no port forwarding, no agent forwarding.
+    ForceCommand internal-sftp -d /incoming -u 0027
+    ChrootDirectory /home/avaloq-gva
+    AllowTcpForwarding no
+    AllowAgentForwarding no
+    AllowStreamLocalForwarding no
+    GatewayPorts no
+    PermitTunnel no
+    X11Forwarding no
+    PermitTTY no
+    # Public-key auth only. Bank generates and hands us their public key;
+    # we install it under /home/avaloq-gva/.ssh/authorized_keys (root-owned,
+    # mode 0600). Password auth stays off even if it's enabled globally.
+    PasswordAuthentication no
+    PubkeyAuthentication yes
+    AuthorizedKeysFile /etc/ssh/authorized_keys.d/avaloq-gva
+    # Defence-in-depth IP allowlist — the firewall is authoritative, this
+    # is a second wall in case a firewall rule is mistakenly relaxed.
+    # Replace these with the three IPs from section 1 of the spec doc.
+    AllowUsers avaloq-gva@194.38.173.1 avaloq-gva@194.38.173.2 avaloq-gva@194.38.173.3
+    # Keepalive — fail fast if the bank's session goes silent so we don't
+    # accumulate ghost connections.
+    ClientAliveInterval 30
+    ClientAliveCountMax 3

@@ -48,7 +48,7 @@ const TIERS: Tier[] = [
       "Payroll Data Prep (ELM-Ready)",
       "P&L + Balance Sheet Reports",
     ],
-    cta: { label: "Start free trial", href: "/register?plan=starter" },
+    cta: { label: "Start 30-day trial", href: "/register?plan=starter" },
   },
   {
     name: "Professional",
@@ -65,7 +65,7 @@ const TIERS: Tier[] = [
       "Priority Support",
     ],
     highlight: true,
-    cta: { label: "Start free trial", href: "/register?plan=professional" },
+    cta: { label: "Start 30-day trial", href: "/register?plan=professional" },
   },
   {
     name: "Family Office",
@@ -81,7 +81,7 @@ const TIERS: Tier[] = [
       "Cross-Entity Dashboards",
       "AI Financial Commentary",
     ],
-    cta: { label: "Talk to our team", href: "mailto:hello@getbeakon.com?subject=Family%20Office%20plan" },
+    cta: { label: "Start 30-day trial", href: "/register?plan=family" },
   },
   {
     name: "Enterprise / Fiduciary",
@@ -96,7 +96,7 @@ const TIERS: Tier[] = [
       "Dedicated SLA",
       "Custom Integrations",
     ],
-    cta: { label: "Request a proposal", href: "mailto:hello@getbeakon.com?subject=Enterprise%20plan" },
+    cta: { label: "Book a call", href: "/contact?plan=enterprise" },
   },
 ];
 

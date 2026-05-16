@@ -22,7 +22,7 @@
  * register funnel). Falls back to "professional" if absent.
  */
 import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, Suspense, useEffect, useState } from "react";
 import {
   AlertCircle, ArrowLeft, ArrowRight, Briefcase, Building2, Check,
   Cloud, Cpu, FileText, Plane, ShieldCheck, Sparkles, TrendingUp,
@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { safeNextPath } from "@/lib/safe-next";
 import Logo from "@/components/logo";
 import BeakonCurrencyExplainer from "@/components/beakon-currency-explainer";
 
@@ -130,9 +131,21 @@ const STEP_LABELS: Record<Step, string> = {
 
 
 export default function SetupPage() {
+  // useSearchParams() forces this component into client-side bailout
+  // during static export. Wrap inner content in <Suspense> so the build
+  // can emit a placeholder.
+  return (
+    <Suspense fallback={<p className="text-sm text-gray-400 py-8 text-center">Loading…</p>}>
+      <SetupPageContent />
+    </Suspense>
+  );
+}
+
+function SetupPageContent() {
   const router = useRouter();
   const params = useSearchParams();
   const [planSlug, setPlanSlug] = useState<string>("professional");
+  const nextPath = safeNextPath(params?.get("next"));
 
   useEffect(() => {
     const p = params?.get("plan");
@@ -206,7 +219,7 @@ export default function SetupPage() {
         console.warn("Could not attach plan; continuing", e);
       }
 
-      router.push("/dashboard");
+      router.push(nextPath || "/dashboard");
     } catch (err: any) {
       setError(err?.name?.[0] || err?.detail || "Failed to create workspace");
       setLoading(false);

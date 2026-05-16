@@ -25,6 +25,7 @@ from typing import Iterator, Optional
 
 import anthropic
 from django.conf import settings
+from django.db import models
 
 from .. import constants as c
 from ..exceptions import ValidationError
@@ -38,7 +39,20 @@ from .ocr import (
 )
 
 
-_SYSTEM_RULES_INVOICE = """You are a precise bookkeeping assistant reading a CUSTOMER INVOICE that this company issued (sent OUT, not received). The "vendor_name" field in the schema is REUSED for the customer name. Suggest the best REVENUE account to credit (not expense — these are amounts billed to a customer). Apply the same accounting-standard reasoning rules and same JSON schema as for bills."""
+_INVOICE_OVERRIDE = """
+INVOICE-SPECIFIC OVERRIDES (this is a CUSTOMER INVOICE sent OUT, not a
+vendor bill received):
+- The "vendor_name" field in the schema is REUSED for the customer name.
+- "suggested_account_id" picks the best REVENUE account to CREDIT (not an
+  expense to debit). The COA in the system context already lists revenue
+  accounts only for invoices.
+- "accounting_standard_reasoning.principle" should reference revenue
+  recognition ("revenue recognition", "performance-obligation transfer",
+  "accrual basis"), not expense recognition.
+- The same VAT/tax rules apply: line_items[].amount is NET of output VAT,
+  tax_amount is output VAT, total = subtotal + tax_amount = gross
+  receivable. AR is booked gross, revenue net, output VAT separately.
+"""
 
 
 _SYSTEM_RULES = """You are a precise bookkeeping assistant reading a vendor bill or receipt.
@@ -66,6 +80,109 @@ CRITICAL RULES — read carefully:
    "£" → "GBP".
 7. "suggested_account_id" MUST be one of the IDs in the chart of
    accounts provided.
+
+VAT / TAX RULES — accounting-correctness critical:
+8. ALL amount fields are recorded NET of VAT/tax:
+     - "subtotal" = sum of line amounts, BEFORE VAT
+     - "tax_amount" = VAT only
+     - "total" = subtotal + tax_amount = gross amount due
+     - "line_items[].amount" = the line's NET (pre-VAT) amount.
+9. Receipts often show line items at gross (VAT-inclusive). When that
+   happens, you MUST back out the VAT before filling line_items[].amount.
+   Example: a CHF 107.50 line at 7.5% VAT becomes line.amount = "100.00";
+   the CHF 7.50 VAT belongs in the document-level tax_amount, never in
+   the line.
+10. The arithmetic MUST reconcile: sum(line_items[].amount) ≈ subtotal
+    (within 0.01 rounding). If a document lacks an explicit subtotal,
+    derive it as total − tax_amount and split line amounts net pro-rata.
+11. NEVER place a gross figure into line_items[].amount. Booking the
+    expense gross over-states the P&L and double-counts the tax —
+    audit-fail.
+
+INVOICE HIERARCHY — never double-count totals against their components:
+12. Many invoices show the SAME money in multiple places (cover summary
+    + detailed VAT declaration + per-line itemisation). These are
+    ALTERNATIVE VIEWS of the same total, NOT additional lines to sum.
+    Pick ONE view and use it consistently.
+13. If a line is labelled "Total X", "Mobile total", "Subtotal X" or is
+    visually the sum of nearby rows, do NOT also include the rows that
+    feed into it as separate line_items. Example: an invoice showing
+    "Mobile 137.70" followed by "Device instalment 41.90" inside that
+    Mobile total — emit ONE line for Mobile, never Mobile + Device on
+    top. Adding both yields a JE that doesn't reconcile to the invoice.
+14. When a "Detailed VAT declaration" or equivalent tax-treatment table
+    is present (rows split by VAT rate, sum equal to invoice total),
+    PREFER IT as the source of truth for line_items. The table is
+    designed to reconcile to the invoice total by construction, and it
+    already classifies each portion's VAT treatment (vatable / exempt /
+    handled-on-separate-invoice). Map those rows to line_items 1-to-1.
+15. The final arithmetic check is binding: sum(line_items[].amount) +
+    tax_amount MUST equal "total". If your extracted lines + VAT don't
+    reconcile to the invoice total, you have double-counted or missed a
+    component — reread the document and adjust before returning.
+
+LEARNING RULES — past corrections from this organisation:
+16. The user context may include a section labelled "PAST_RULES" listing
+    LearningRules that the org's reviewer has approved. Each rule names a
+    vendor (and optionally a customer number / invoice pattern), the
+    correction it teaches, and a plain-English instruction.
+17. If the invoice you are reading matches a rule's vendor (case-
+    insensitive name match is enough) AND its scope conditions, FOLLOW
+    THE RULE. The reviewer has already decided how invoices like this
+    should be booked; treat their instruction as binding.
+18. List every rule you followed in "applied_rule_ids". Include a rule
+    ONLY if its guidance actually changed your output — do not pad the
+    list. Use [] when no rule applied.
+19. If a rule conflicts with the document (e.g. the rule says X but the
+    invoice clearly shows Y), prefer the document and OMIT the rule from
+    applied_rule_ids. The reviewer can update the rule later.
+20. Never invent rule IDs that weren't in PAST_RULES.
+
+DUPLICATE / ABSORBED LINES — when the same money is itemised twice:
+21. For each entry in line_items, set is_absorbed=true and a short
+    absorbed_note when the line's amount is ALREADY captured by another
+    line above it on the cover summary or VAT declaration table.
+    Classic case: Sunrise invoice — the cover shows "Mobile 137.70"; the
+    per-SIM detail then itemises "Up Mobile L 36.60", "Flex Upgrade
+    10.00", "Device instalment 20.95" twice. The detail rows are
+    informational; the 137.70 cover figure is what was paid. Mark the
+    detail rows is_absorbed=true with absorbed_note like "Included in
+    Mobile total". The reconciliation arithmetic in rule 15 applies
+    ONLY to non-absorbed lines.
+22. When in doubt, prefer FEWER non-absorbed lines and mark the rest
+    absorbed. It is safer to under-itemise than to double-count.
+
+CUSTOMER NUMBER — the vendor's identifier for the bill recipient:
+23. If the invoice prints a "customer number", "subscriber number",
+    "account number", "client number" or equivalent, copy it into
+    customer_number verbatim. This is NEVER the same as invoice_number.
+    If the invoice does not print one, return an empty string.
+
+RANKED ACCOUNT CANDIDATES — when confidence is low:
+25a. If your confidence_in_account is below 0.6, you MUST also fill
+     account_candidates with 3-5 alternative account IDs ranked from
+     most to least likely. Each entry has id (from the provided CoA),
+     score (0.0-1.0 likelihood, monotone-decreasing across the list),
+     and reason (one sentence under 90 chars). When confidence is
+     0.0 (you have no preferred pick), still return a ranked list —
+     give the reviewer something to click instead of an empty form.
+25b. When confidence_in_account >= 0.6, you may return an empty
+     account_candidates list — the reviewer will accept your
+     suggested_account_id as-is. Don't pad the list for the sake of
+     it; only include candidates a working bookkeeper would genuinely
+     consider.
+25c. Every id in account_candidates MUST be a real ID from the chart
+     of accounts you were given. Never invent IDs.
+
+SUGGESTED RULE TEXT — proactive teaching:
+24. After you finish extraction, ask yourself: "is there a structural
+    quirk on this invoice that is likely to recur on the next invoice
+    from this vendor — a duplicate-line layout, an unusual VAT split,
+    a known mis-categorisation hazard?" If yes, draft a SHORT
+    plain-English paragraph in suggested_rule_text telling the next
+    extractor (or the human reviewer) how to handle it. Address the
+    instruction to "Beakon" / "the extractor", not the reader. If
+    nothing stands out, return an empty string.
 
 SERVICE PERIOD RULES — critical for revenue recognition / matching:
 - Many invoices cover a SERVICE PERIOD (e.g. "subscription Nov 2026 —
@@ -132,12 +249,81 @@ _BILL_INPUT_SCHEMA = {
                 "properties": {
                     "description": {"type": "string"},
                     "amount": {"type": "string"},
+                    # B7 — when an invoice lists the same money twice
+                    # (e.g. Sunrise: the device instalment row in the
+                    # per-line breakdown is already inside the Mobile
+                    # subtotal on the cover summary), mark the duplicate
+                    # detail row with is_absorbed=true. Absorbed lines
+                    # are NOT posted — they're surfaced in the UI for
+                    # auditor visibility and excluded from the JE.
+                    "is_absorbed": {
+                        "type": "boolean",
+                        "description": "True if this line's amount is "
+                                        "ALREADY included in another "
+                                        "line/subtotal on the same "
+                                        "invoice. Do not post absorbed "
+                                        "lines. Default false.",
+                    },
+                    "absorbed_note": {
+                        "type": "string",
+                        "description": "Short note for the auditor "
+                                        "explaining why this line is "
+                                        "absorbed (e.g. 'Included in "
+                                        "Mobile total'). Empty when "
+                                        "is_absorbed=false.",
+                    },
                 },
                 "required": ["description", "amount"],
             },
         },
+        "customer_number": {
+            "type": ["string", "null"],
+            "description": "The vendor's own customer / subscriber / "
+                            "account number for the bill recipient — "
+                            "if printed on the invoice. NOT the invoice "
+                            "number; NOT our vendor code. Example: "
+                            "Sunrise '1000779477'.",
+        },
+        "suggested_rule_text": {
+            "type": "string",
+            "description": "If you noticed something on this invoice "
+                            "that would be worth teaching Beakon for "
+                            "future bills from THIS vendor (a "
+                            "structural quirk, a recurring duplicate, "
+                            "a VAT treatment), draft a single-paragraph "
+                            "instruction in plain English the reviewer "
+                            "can save as a LearningRule. Empty string "
+                            "when there's nothing rule-worthy.",
+        },
         "suggested_account_id": {"type": "integer"},
         "suggested_account_reasoning": {"type": "string"},
+        # B8 — when confidence_in_account is low (< 0.6), the reviewer
+        # still needs a shortlist. Return up to 5 candidate account IDs
+        # ranked by score with a one-line reason each. The frontend
+        # renders these as clickable chips beneath the empty dropdown.
+        "account_candidates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "integer"},
+                    "score": {
+                        "type": "number",
+                        "description": "0.0-1.0 likelihood this account fits the bill.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "One sentence (< 90 chars) on why this account.",
+                    },
+                },
+                "required": ["id", "score", "reason"],
+            },
+            "description": "Up to 5 ranked account candidates. Required "
+                            "when confidence_in_account < 0.6; can be "
+                            "empty otherwise. IDs must come from the "
+                            "provided chart of accounts.",
+        },
         "accounting_standard_reasoning": {
             "type": "object",
             "additionalProperties": False,
@@ -150,15 +336,28 @@ _BILL_INPUT_SCHEMA = {
         },
         "confidence": {"type": "number", "description": "0.0-1.0 overall extraction quality"},
         "confidence_in_account": {"type": "number", "description": "0.0-1.0 confidence in account choice"},
+        # B5 — list the rule IDs that you actively followed while
+        # extracting this invoice. Empty array when no rules applied.
+        "applied_rule_ids": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "IDs of LearningRules from PAST_RULES that you "
+                           "followed for this invoice. Empty array if none "
+                           "applied. Only include rules whose vendor/scope "
+                           "matched and that actually changed your output.",
+        },
     },
     "required": [
         "vendor_name", "invoice_number", "invoice_date", "due_date",
         "service_period_start", "service_period_end",
         "subtotal", "tax_amount", "total", "currency",
         "description", "line_items",
+        "customer_number", "suggested_rule_text",
         "suggested_account_id", "suggested_account_reasoning",
+        "account_candidates",
         "accounting_standard_reasoning",
         "confidence", "confidence_in_account",
+        "applied_rule_ids",
     ],
 }
 
@@ -170,6 +369,64 @@ _BILL_TOOL = {
     ),
     "input_schema": _BILL_INPUT_SCHEMA,
 }
+
+
+def _learning_rules_block(
+    organization, entity: Entity, limit: int = 20,
+) -> Optional[str]:
+    """Build the PAST_RULES block injected into the OCR system prompt.
+
+    Returns formatted text or None when the org has no active rules
+    (avoids sending an empty section to the model). Rules are scoped to
+    the org and either entity-agnostic OR matching this entity. We cap
+    at `limit` most-recently-created rules so prompt size stays bounded
+    — B6 can refine the ranking with last_used / success_count once
+    those metrics start filling in.
+    """
+    # Lazy import — beakon_core kernel must not pull learning models at
+    # module load time (the same pattern other ocr_claude lookups use).
+    from ..models import LearningRule  # noqa: WPS433
+
+    qs = (
+        LearningRule.objects
+        .filter(organization=organization, is_active=True)
+        .filter(
+            # Entity-agnostic rules apply to every entity in the org.
+            # Entity-specific rules only apply when entity matches.
+            models.Q(entity__isnull=True) | models.Q(entity=entity)
+        )
+        .select_related("vendor")
+        .order_by("-created_at")[:limit]
+    )
+    rules = list(qs)
+    if not rules:
+        return None
+
+    lines = [
+        "PAST_RULES — corrections the reviewer has approved. Follow these "
+        "when the invoice matches the vendor/scope. Report applied rule "
+        "IDs in applied_rule_ids. The reviewer has already decided how "
+        "invoices like this should be booked; treat their instructions "
+        "as binding for matching invoices, but defer to the document if "
+        "they conflict outright.",
+        "",
+    ]
+    for r in rules:
+        v_code = r.vendor.code if r.vendor_id else "?"
+        v_name = r.vendor.name if r.vendor_id else "?"
+        lines.append(f"--- Rule #{r.id} ---")
+        lines.append(f"Vendor: {v_code} ({v_name})")
+        if r.customer_number:
+            lines.append(f"Customer number on invoice: {r.customer_number}")
+        if r.invoice_pattern:
+            lines.append(f"Invoice pattern: {r.invoice_pattern}")
+        if r.correction_type:
+            lines.append(f"Correction type: {r.correction_type}")
+        lines.append(f"Scope: {r.get_scope_display()}")
+        lines.append("Instruction:")
+        lines.append(r.human_instruction)
+        lines.append("")
+    return "\n".join(lines)
 
 
 def _entity_context_text(
@@ -248,8 +505,14 @@ def _build_request(
     document = _document_block(file_bytes, content_type)
     mode = "text" if content_type == "application/pdf" else "vision"
 
+    # Invoices share the bill extraction rules — same schema, same VAT
+    # logic, same arithmetic checks — with a small override block that
+    # flips the debit/credit framing. Sending bill rules alone to an
+    # invoice produced thin extractions; this concatenation is the
+    # documented contract.
     rules = (
-        _SYSTEM_RULES_INVOICE if document_type == DOCUMENT_TYPE_INVOICE
+        _SYSTEM_RULES + _INVOICE_OVERRIDE
+        if document_type == DOCUMENT_TYPE_INVOICE
         else _SYSTEM_RULES
     )
     doc_label = "customer invoice" if document_type == DOCUMENT_TYPE_INVOICE else "bill"
@@ -266,6 +529,17 @@ def _build_request(
             "cache_control": {"type": "ephemeral"},
         },
     ]
+    # B5: append active LearningRules for this org. Only when at least
+    # one rule exists — empty block would waste tokens and confuse the
+    # model. Ephemeral cache so per-extraction additions don't break the
+    # entity-context cache hit when no rules exist.
+    rules_block = _learning_rules_block(entity.organization, entity)
+    if rules_block:
+        system.append({
+            "type": "text",
+            "text": rules_block,
+            "cache_control": {"type": "ephemeral"},
+        })
     user_content = [
         document,
         {

@@ -230,18 +230,43 @@ export async function syncOrganizationContext(): Promise<UserOrganization | null
   return activeOrg;
 }
 
+/** Safely parse a JSON response, falling back to a synthetic error when
+ *  the server returned an HTML 500 / proxy error / network blip. Earlier
+ *  the auth helpers called `res.json()` directly, which threw
+ *  "Unexpected token 'I', 'Internal S'..." when Django was mid-reload
+ *  and Next.js's proxy passed back an HTML 500 page. This wraps that
+ *  raw failure as a structured `{ detail }` so the caller's
+ *  parseApiError can surface it cleanly. */
+async function safeJson(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Trim HTML/whitespace, take first ~140 chars as a hint
+    const hint = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 140);
+    return {
+      detail: res.ok
+        ? "Server returned an unexpected response. Please try again."
+        : `Server error (${res.status})${hint ? `: ${hint}` : ""}. Please try again in a moment.`,
+    };
+  }
+}
+
+
 export async function login(email: string, password: string) {
   const res = await fetch(`${API_BASE}/auth/login/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
-  if (!res.ok) throw await res.json();
-  const data = await res.json();
-  localStorage.setItem("access_token", data.access);
-  localStorage.setItem("refresh_token", data.refresh);
+  const data = await safeJson(res);
+  if (!res.ok) throw data;
+  const d = data as { access?: string; refresh?: string };
+  if (d.access) localStorage.setItem("access_token", d.access);
+  if (d.refresh) localStorage.setItem("refresh_token", d.refresh);
   await syncOrganizationContext();
-  return data;
+  return d;
 }
 
 export async function register(email: string, password: string, firstName: string, lastName: string) {
@@ -250,8 +275,21 @@ export async function register(email: string, password: string, firstName: strin
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password, first_name: firstName, last_name: lastName }),
   });
-  if (!res.ok) throw await res.json();
-  return res.json();
+  const data = await safeJson(res);
+  if (!res.ok) throw data;
+  return data;
+}
+
+/** POST /auth/check-email/  → does an account already exist for this email? */
+export async function checkEmailExists(email: string): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/auth/check-email/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  const data = await safeJson(res);
+  if (!res.ok) throw data;
+  return Boolean((data as { exists?: boolean })?.exists);
 }
 
 export async function logout() {

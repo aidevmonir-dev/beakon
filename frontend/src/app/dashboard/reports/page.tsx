@@ -3,8 +3,9 @@
 /* Financial reports — tabs for Trial Balance / P&L / Balance Sheet.
  * Single-entity or consolidated (entity=—all—). Date controls per report.
  * Every figure is computed from posted journal lines at request time. */
+import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, Download, Printer } from "lucide-react";
+import { ArrowLeft, BarChart3, Download, Printer } from "lucide-react";
 import { api } from "@/lib/api";
 import { fmt2, fmt2Fixed, fmtAccounting, fmtAccountingFixed, fmtPct, fmtDate, fmtDateTime, fmtLabel } from "@/lib/format";
 import NarrativeBox from "@/components/narrative-box";
@@ -192,6 +193,12 @@ export default function ReportsPage() {
 
   return (
     <div>
+      <Link
+        href="/dashboard/accounting"
+        className="inline-flex items-center text-xs text-gray-500 hover:text-gray-800 mb-3"
+      >
+        <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back to Accounting
+      </Link>
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-lg font-semibold text-gray-900 flex items-center gap-2">

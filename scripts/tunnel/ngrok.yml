@@ -1,0 +1,26 @@
+# ngrok config for Beakon dev.
+#
+# How to use:
+#   1. Sign up free at https://dashboard.ngrok.com/signup
+#   2. Dashboard -> Universal Gateway -> Domains -> "+ Create Domain"
+#      Claim your free static domain (e.g. getbeakon.ngrok-free.app).
+#   3. Dashboard -> Your Authtoken -> copy it -> run:
+#         ngrok config add-authtoken <YOUR_TOKEN>
+#      (That writes %USERPROFILE%\AppData\Local\ngrok\ngrok.yml — leave it alone.)
+#   4. Replace YOUR-STATIC-DOMAIN.ngrok-free.app below with the one you claimed.
+#   5. Start the tunnel:
+#         ngrok start --config D:\bookkeeper\scripts\tunnel\ngrok.yml beakon
+#
+# Only the frontend (port 3000) is exposed — Next.js rewrites /api/* to Django
+# on localhost:8000, so clients reach the backend through the same URL.
+
+version: "2"
+
+tunnels:
+  beakon:
+    proto: http
+    addr: 3000
+    domain: unshipped-gusty-doctrine.ngrok-free.dev
+    # Pass the original Host header to Next.js so its allowedDevOrigins check passes.
+    host_header: rewrite
+    inspect: false

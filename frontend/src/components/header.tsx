@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, logout } from "@/lib/api";
 import { LogOut, ChevronDown, Bell, Building2, Check, Menu } from "lucide-react";
+import TrialBanner from "@/components/trial-banner";
 
 interface OrgInfo {
   id: number;
@@ -114,8 +115,10 @@ export default function Header({ onMenuClick }: HeaderProps) {
         </div>
       </div>
 
-      {/* Right — notifications + user menu */}
-      <div className="flex items-center gap-1 sm:gap-4 shrink-0">
+      {/* Right — trial pill (Thomas §5.10) + notifications + user menu */}
+      <div className="flex items-center gap-1 sm:gap-3 shrink-0">
+        <TrialBanner />
+
         <button className="relative p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-50">
           <Bell className="w-5 h-5" />
         </button>

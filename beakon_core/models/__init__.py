@@ -28,6 +28,7 @@ from .journal import (  # noqa: F401
     JournalEntry,
     JournalLine,
     ApprovalAction,
+    JECorrection,
 )
 from .documents import SourceDocument  # noqa: F401
 from .tax import TaxCode  # noqa: F401
@@ -35,7 +36,8 @@ from .recognition import RecognitionRule, RecognitionSchedule  # noqa: F401
 from .workflow_diagram import WorkflowDiagram  # noqa: F401
 from .posting_rules import PostingRule  # noqa: F401
 from .parties import Vendor, Customer  # noqa: F401
-from .ap import Bill, BillLine  # noqa: F401
+from .ap import Bill, BillLine, BillCorrection  # noqa: F401
+from .learning import LearningRule  # noqa: F401
 from .ar import Invoice, InvoiceLine  # noqa: F401
 from .masters import (  # noqa: F401
     BankAccount as BankAccountMaster,
@@ -50,4 +52,15 @@ from .masters import (  # noqa: F401
     Property,
     RelatedParty,
     TaxLot,
+)
+from .portfolio_feed import (  # noqa: F401
+    PortfolioTrade,
+    PositionSnapshot,
+    PerformanceSnapshot,
+    OpenOrder,
+)
+from .billing import (  # noqa: F401
+    Plan,
+    OrganizationSubscription,
+    ActivationRequest,
 )

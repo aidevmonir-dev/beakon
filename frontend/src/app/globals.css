@@ -1,42 +1,63 @@
 @import "tailwindcss";
 
 @theme {
-  /* Typography — editorial pairing: Fraunces (display serif, italic) + DM Sans (geometric body). */
+  /* Typography — editorial pairing: Fraunces (display serif, italic) +
+   * DM Sans (geometric body) + JetBrains Mono (financial figures + codes). */
   --font-sans: var(--font-sans), "DM Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-display: var(--font-display), "Fraunces", "Iowan Old Style", Georgia, serif;
+  --font-mono: var(--font-mono), "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace;
 
   /* Warm cream sections — paper-like contrast against the deep navy hero. */
   --color-paper-50: #faf6ee;
   --color-paper-100: #f4ede0;
   --color-paper-200: #e8dcc4;
 
-  /* Brand palette — blue-teal, tuned to match the Digits aesthetic. */
-  --color-brand-50: #eef5f8;
-  --color-brand-100: #d9e8ee;
+  /* Brand palette — Beakon navy. Retuned 2026-05-12 per Thomas's design
+   * feedback (§5.3): the 700/800/900 stops anchor on his "primary navy"
+   * (#17485A / #123B4A) so module headers, active nav, and primary
+   * buttons read as confidently Beakon instead of generic blue-grey. */
+  --color-brand-50:  #eff6ff;  /* = Tailwind blue-50; soft active backgrounds */
+  --color-brand-100: #dbeafe;
   --color-brand-200: #b6d2dd;
   --color-brand-300: #8ab6c7;
   --color-brand-400: #5c96ac;
   --color-brand-500: #3e7a91;
   --color-brand-600: #2f6479;
-  --color-brand-700: #234f60;
-  --color-brand-800: #1a3c4a;
-  --color-brand-900: #132b37;
-  --color-brand-950: #0a1a22;
+  --color-brand-700: #17485a;  /* Thomas's lighter navy */
+  --color-brand-800: #123b4a;  /* Thomas's primary navy */
+  --color-brand-900: #0c2935;
+  --color-brand-950: #061720;
 
-  /* Mint/teal accent used for chart fills + "positive" highlights. */
-  --color-mint-50: #eefaf6;
+  /* Mint/teal accent — Thomas's Beakon teal #2FB89A (§5.3) anchors at
+   * mint-500. Used for positive status, chart fills, "active" tags. */
+  --color-mint-50:  #ecfdf5;   /* Thomas's soft teal */
   --color-mint-100: #d3f2e7;
   --color-mint-200: #a6e4cf;
   --color-mint-300: #7ad1b6;
   --color-mint-400: #56bd9e;
-  --color-mint-500: #3aa888;
-  --color-mint-600: #2c8a6e;
-  --color-mint-700: #246e58;
+  --color-mint-500: #2fb89a;   /* Beakon teal */
+  --color-mint-600: #209680;
+  --color-mint-700: #166654;
 
-  /* Canvas — the soft blue wash the whole dashboard sits on. */
-  --color-canvas-50: #f4f7fa;
-  --color-canvas-100: #e6edf2;
-  --color-canvas-200: #d6e1e9;
+  /* Semantic colour mapping (Thomas §5.3) — use these classes deliberately:
+   *   PRIMARY ACTIONS .......  bg-blue-600 / text-blue-700      (#2563EB action blue)
+   *   POSITIVE STATUS ......   bg-mint-500 / text-mint-700      (Beakon teal)
+   *   PENDING / NEEDS ACTION   bg-amber-500 / text-amber-700
+   *   EXCEPTIONS (rare) ....   bg-red-500   / text-red-700
+   *   AI / INSIGHTS ........   violet-* — RESERVED. Do not use for
+   *                            financial metrics.
+   *   BRAND / NAV ..........   brand-700/800 = Beakon navy
+   */
+
+  /* Canvas — Thomas's 2026-05-12 design feedback (§5.1):
+   * lighter dashboard canvas, slate-toned to feel premium and clear.
+   * canvas-100 is the body background; canvas-200 is the standard
+   * card/divider border; canvas-50 is the slightly-darker hover state
+   * that still reads against canvas-100.
+   */
+  --color-canvas-50:  #f1f5f9;  /* slate-100 — hover surfaces */
+  --color-canvas-100: #f8fafc;  /* slate-50  — main canvas (was #e6edf2) */
+  --color-canvas-200: #e2e8f0;  /* slate-200 — card borders, dividers (was #d6e1e9) */
 }
 
 @layer base {
@@ -122,6 +143,10 @@
   @apply btn bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 focus:ring-brand-500;
 }
 
+@utility btn-secondary-sm {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-white text-gray-700 border border-gray-200 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
 @utility btn-danger {
   @apply btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
 }
@@ -138,8 +163,12 @@
   @apply block text-sm font-medium text-gray-700 mb-1;
 }
 
+/* Card — Thomas's 2026-05-12 polish (§5.1): pure white, 16px radius,
+ * slate-toned border, soft elevated shadow. Anchors the premium feel
+ * against the lighter canvas. */
 @utility card {
-  @apply bg-white rounded-2xl border border-gray-100 shadow-sm;
+  @apply bg-white rounded-2xl border border-canvas-200;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
 
 /* Big rounded blue "canvas" that wraps the dashboard content, as in Digits. */

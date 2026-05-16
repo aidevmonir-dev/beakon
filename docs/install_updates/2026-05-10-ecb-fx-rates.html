@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Beakon — 2026 05 10 Ecb Fx Rates</title>
+<style>
+        :root { color-scheme: light; }
+        * { box-sizing: border-box; }
+        body { font: 13px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+               color: #1f2937; background: #fff; max-width: 1080px;
+               margin: 28px auto; padding: 0 24px; }
+        h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
+        h2 { font-size: 20px; margin: 32px 0 12px;
+             padding-bottom: 6px; border-bottom: 2px solid #0f172a;
+             color: #0f172a; }
+        h3 { font-size: 15px; margin: 22px 0 6px; color: #1d4ed8; }
+        h4 { font-size: 13px; margin: 16px 0 4px; color: #334155;
+             text-transform: uppercase; letter-spacing: 0.04em; }
+        p  { margin: 6px 0; }
+        ul { margin: 4px 0; padding-left: 22px; }
+        li { margin: 2px 0; }
+        blockquote { margin: 8px 0; padding: 8px 14px;
+                     background: #f0f9ff; border-left: 3px solid #0ea5e9;
+                     color: #0c4a6e; font-style: italic; font-size: 12.5px; }
+        code { font: 12px ui-monospace, "SF Mono", "Cascadia Code", monospace;
+               background: #f1f5f9; padding: 1px 6px; border-radius: 4px;
+               color: #0f172a; }
+        pre { background: #0f172a; color: #f8fafc; padding: 12px 16px;
+              border-radius: 6px; overflow-x: auto; font-size: 12px;
+              line-height: 1.45; }
+        pre code { background: transparent; padding: 0; color: inherit; }
+        h3 code { background: transparent; padding: 0; color: #1d4ed8;
+                  font-weight: 600; }
+        table { border-collapse: collapse; width: 100%; margin: 8px 0 18px;
+                font-size: 12.5px; }
+        th, td { border: 1px solid #e5e7eb; padding: 6px 9px; text-align: left;
+                 vertical-align: top; }
+        th { background: #f8fafc; font-weight: 600; color: #334155;
+             font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+        td code { font-size: 11.5px; }
+        hr { border: 0; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+        em { color: #6366f1; font-style: italic; }
+        strong { color: #0f172a; }
+
+        @media print {
+          body { margin: 0; padding: 12mm 14mm; max-width: none; }
+          h2 { break-before: auto; break-after: avoid; }
+          h3, h4 { break-after: avoid; }
+          table, pre, blockquote { break-inside: avoid; }
+          tr { break-inside: avoid; }
+          a { color: inherit; text-decoration: none; }
+        }
+    </style>
+</head>
+<body>
+<h1>ECB foreign-exchange reference-rate sync</h1>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Date</td><td>2026-05-10</td></tr>
+    <tr><td>Component</td><td>FX</td></tr>
+    <tr><td>Author</td><td>Monirul</td></tr>
+    <tr><td>Status</td><td>Installed</td></tr>
+    <tr><td>Reversible</td><td>Yes — manual rates are preserved; ECB rows can be deleted by <code>source="ecb"</code> filter without touching anything else.</td></tr>
+  </tbody></table>
+<hr>
+<h2>1. What this is</h2>
+<p>Beakon now pulls daily foreign-exchange reference rates directly from the <strong>European Central Bank</strong>, with one click in the UI or one cron line on the server. Roughly 30 major currency pairs (EUR-base), plus inverses, plus CHF cross-rates so the kernel never has to triangulate at posting time. ECB publishes free, no-API-key rates around 16:00 CET on every business day. The data lands in the existing <code>FXRate</code> table with <code>source = "ecb"</code>, which keeps it visually distinct from hand-keyed entries.</p>
+<h2>2. Why we built it</h2>
+<p>Multi-currency posting and FX revaluation are blueprint requirements (layer 5 in the 2026-04-30 architecture document — multi-dimensional posting + Swiss reporting). Without rates the kernel cannot:</p>
+<ul><li>Translate a USD bill into the entity's CHF functional currency.</li><li>Run period-end FX revaluation on monetary balances.</li><li>Render reports in a chosen presentation currency.</li></ul>
+<p>ECB is the right *first* source: free, official, no key, daily, and covers every currency Thomas's entities transact in today. Commercial sources (Bloomberg, OANDA) can layer on later for intraday, exotic pairs, or audit-grade fixings.</p>
+<h2>3. What's installed (technical)</h2>
+<ul><li><strong>Models / migrations:</strong> none new — uses the existing <code>FXRate</code></li></ul>
+<p>table (already present pre-2026-05). The <code>source</code> column is the filter key.</p>
+<ul><li><strong>Service:</strong> <code>beakon_core/services/ecb_fx.py</code></li><li><code>ECBFXService.sync(days=N)</code> — pulls daily or 90-day endpoint,</li></ul>
+<p>parses the gesmes / ECB XML, derives inverses + CHF crosses, idempotent upsert on <code>(from, to, as_of)</code>.</p>
+<ul><li>Returns a <code>SyncResult</code> dataclass with row counts.</li><li>Raises <code>ECBSyncError</code> on network or parse failure.</li><li><strong>Management command:</strong></li></ul>
+<p><code>beakon_core/management/commands/sync_ecb_fx_rates.py</code></p>
+<ul><li><code>manage.py sync_ecb_fx_rates [--days N]</code> (1–90, default 1)</li><li><strong>API:</strong> <code>POST /beakon/fx-rates/sync-ecb/</code></li><li>View: <code>api/views/beakon.py::FXRateSyncECBView</code></li><li>URL wired in <code>api/beakon_urls.py</code></li><li>Body: <code>{"days": 1}</code> (default) or <code>{"days": 90}</code> for backfill</li><li>Auth: <code>IsAuthenticated + IsOrganizationMember</code></li><li>Returns the <code>SyncResult</code> JSON; <code>502</code> on ECB unreachable.</li><li><strong>Frontend:</strong> <code>frontend/src/app/dashboard/fx-rates/page.tsx</code></li><li>"Sync ECB" button in the page header.</li><li>Source-tone badge: <code>ecb</code> styled in brand colour, <code>manual</code> neutral.</li><li>Stats card "ECB rows" with latest sync date.</li><li><strong>Settings / env vars:</strong> none. Runs out of the box.</li></ul>
+<h2>4. What the admin needs to do</h2>
+<pre><code class="lang-powershell"># 1. Pull the latest code (already done if you are reading this
+#    after `git pull`).
+git pull
+
+# 2. No migration is required — FXRate predates this update.
+
+# 3. One-time backfill of the last 90 business days so reports for
+#    historical periods can revalue without gaps.
+python manage.py sync_ecb_fx_rates --days 90
+
+# 4. Schedule the daily refresh.
+
+#    Linux / production cron — runs at 17:00 CET, Mon–Fri:
+#    0 17 * * 1-5 cd /app &amp;&amp; python manage.py sync_ecb_fx_rates
+
+#    Windows (Allina dev box) — Task Scheduler:
+#    schtasks /Create /SC DAILY /TN "Beakon ECB FX" /ST 17:00 ^
+#       /TR "powershell -Command \"cd D:\bookkeeper; python manage.py sync_ecb_fx_rates\""</code></pre>
+<p>ECB has no holiday calendar in its XML — non-publishing days are simply absent. The cron is safe to fire on weekends/holidays; it will see "no new fixing" and write nothing.</p>
+<h2>5. How to use it</h2>
+<ul><li><strong>UI:</strong> Dashboard → <strong>FX Rates</strong> → top-right <strong>Sync ECB</strong> button.</li></ul>
+<p>Click once for today, or expand the dropdown for a 90-day backfill. The success banner reports rows upserted + latest fixing date.</p>
+<ul><li><strong>CLI:</strong></li></ul>
+<pre><code class="lang-powershell">  python manage.py sync_ecb_fx_rates --days 1</code></pre>
+<p>Sample output:</p>
+<pre><code class="lang-text">  Synced 1 day(s) from ECB.
+    Latest fixing:    2026-05-08
+    Rows upserted:    114
+    Inverses added:   30
+    Cross-rates:      58
+    Source:           https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml</code></pre>
+<ul><li><strong>API:</strong></li></ul>
+<pre><code class="lang-http">  POST /beakon/fx-rates/sync-ecb/
+  Content-Type: application/json
+  {"days": 1}</code></pre>
+<p>Response (200):</p>
+<pre><code class="lang-json">  {
+    "fetched_days": 1,
+    "rows_upserted": 114,
+    "inverses_added": 30,
+    "cross_rates_added": 58,
+    "latest_date": "2026-05-08",
+    "source_url": "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
+  }</code></pre>
+<h2>6. What runs automatically</h2>
+<p>Once the cron / scheduled task in step 4 is in place, Beakon refreshes ECB rates every weekday at 17:00 CET. There is no signal-based or on-demand auto-fetch — postings against missing dates fall back to the most-recent prior rate per the kernel's standard FX lookup.</p>
+<h2>7. Verifying it works</h2>
+<p>After clicking <strong>Sync ECB</strong> (or running the CLI), at least one of the following should be true:</p>
+<ul><li>The "ECB rows" summary card on the FX Rates page shows a non-zero</li></ul>
+<p>number with a recent "Latest:" date.</p>
+<ul><li>Django shell:</li></ul>
+<pre><code class="lang-python">  from beakon_core.models import FXRate
+  FXRate.objects.filter(source="ecb").count()      # &gt; 0
+  FXRate.objects.filter(source="ecb").latest("as_of").as_of</code></pre>
+<ul><li>Pick any ECB-quoted pair and check the value matches</li></ul>
+<p>https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml for the same date.</p>
+<h2>8. Rolling back</h2>
+<p>In order of severity:</p>
+<ul><li><strong>Stop refreshing:</strong> disable the cron / scheduled task. Existing</li></ul>
+<p>rows remain usable.</p>
+<ul><li><strong>Hide the UI button:</strong> comment out the "Sync ECB" <code>&lt;button&gt;</code> in</li></ul>
+<p><code>frontend/src/app/dashboard/fx-rates/page.tsx</code> (search for <code>Sync ECB</code>).</p>
+<ul><li><strong>Wipe ECB-sourced rows only</strong> (manual entries are preserved):</li></ul>
+<pre><code class="lang-python">  from beakon_core.models import FXRate
+  FXRate.objects.filter(source="ecb").delete()</code></pre>
+<ul><li><strong>Revert the code:</strong> the service and command landed in commit</li></ul>
+<p><code>111de0f</code> ("Beakon engine + masters + AI workflow build-out") — cherry-pick a revert of those two files plus the URL line and the frontend button.</p>
+<h2>9. Known limits</h2>
+<ul><li>ECB does <strong>not</strong> quote weekends, ECB holidays, or non-EUR-cross</li></ul>
+<p>exotics (e.g. EGP, NGN, ARS). Postings in those currencies need a manual rate or a future commercial-data integration.</p>
+<ul><li>Cross-rates are derived only for currencies in <code>CROSS_BASES = ("CHF",)</code>.</li></ul>
+<p>Adding GBP or USD cross-rates is a one-line tuple change in <code>ecb_fx.py</code>.</p>
+<ul><li>ECB is a daily *reference* fixing, not an intraday or audit-grade</li></ul>
+<p>rate. For audit-grade FX (e.g. acquisition-date rates for a business combination), record the rate manually with <code>source</code> set to a descriptive string (not <code>"ecb"</code>).</p>
+<ul><li>The 90-day endpoint is the deepest history fetched today. ECB's</li></ul>
+<p>full-history endpoint (<code>eurofxref-hist.xml</code>, ~5 MB back to 1999) is intentionally not wired in — opt in by editing <code>ecb_fx.py</code> if a deeper backfill is needed.</p>
+<h2>10. Files touched</h2>
+<pre><code class="lang-text">beakon_core/services/ecb_fx.py                        | new (+234)
+beakon_core/management/commands/sync_ecb_fx_rates.py  | new ( +45)
+beakon_core/services/__init__.py                      | export ECBFXService
+api/views/beakon.py                                   | +FXRateSyncECBView
+api/beakon_urls.py                                    | +fx-rates/sync-ecb/ route
+frontend/src/app/dashboard/fx-rates/page.tsx          | "Sync ECB" UI</code></pre>
+<h2>11. References</h2>
+<ul><li>Beakon Architecture (2026-04-30), layer 5: multi-dimensional</li></ul>
+<p>posting + Swiss reporting requires reliable FX.</p>
+<ul><li>Founder working paper: multi-entity, multi-currency mandate.</li><li>ECB feed documentation: <https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html></li><li>First install-update document — sets the format for everything</li></ul>
+<p>that follows. See <code>_TEMPLATE.md</code>.</p>
+</body>
+</html>

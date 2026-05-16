@@ -27,7 +27,7 @@ from datetime import date as dt_date
 from typing import Optional
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from .. import constants as c
@@ -64,6 +64,7 @@ class BillService:
         total: Optional[Decimal] = None,
         description: str = "",
         explanation: str = "",
+        ai_applied_rule_ids: Optional[list[int]] = None,
         user=None,
     ) -> Bill:
         """Create a draft Bill with its lines. ``lines`` is a list of::
@@ -116,6 +117,8 @@ class BillService:
             status=BILL_DRAFT,
             description=description,
             explanation=explanation,
+            # B6 — provenance for the feedback loop.
+            ai_applied_rule_ids=list(ai_applied_rule_ids or []),
             created_by=user,
         )
         for i, ln in enumerate(lines):
@@ -319,6 +322,24 @@ class BillService:
             "status", "approved_by", "approved_at",
             "accrual_journal_entry", "updated_at",
         ])
+
+        # B6 — feedback loop: bill was approved without the reviewer
+        # filing a correction, so every LearningRule the AI followed on
+        # this draft counts as a successful application. Updates the rule
+        # counters in the same transaction so the rules registry can't
+        # report counters that disagree with the JE history.
+        if bill.ai_applied_rule_ids:
+            from ..models import LearningRule
+            now = timezone.now()
+            LearningRule.objects.filter(
+                organization=bill.organization,
+                id__in=bill.ai_applied_rule_ids,
+            ).update(
+                success_count=F("success_count") + 1,
+                last_used=now,
+                updated_at=now,
+            )
+
         return bill
 
     @staticmethod

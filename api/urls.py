@@ -12,6 +12,7 @@ from .views.accounts import (
     CustomTokenObtainPairView,
     LoginHistoryView,
     LogoutView,
+    CheckEmailView,
     MeView,
     PasswordChangeView,
     PasswordResetConfirmView,
@@ -36,6 +37,7 @@ from .views.organizations import (
 urlpatterns = [
     # ── Auth ──────────────────────────────────────────────────────────
     path("auth/register/", RegisterView.as_view(), name="register"),
+    path("auth/check-email/", CheckEmailView.as_view(), name="check-email"),
     path("auth/login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("auth/logout/", LogoutView.as_view(), name="logout"),
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),

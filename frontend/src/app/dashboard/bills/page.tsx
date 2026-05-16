@@ -9,11 +9,11 @@
  * v1 keeps it on a single page: list + filter + create modal + inline
  * approve/reject/pay actions. A future bills/[id] detail page can show
  * the linked accrual & payment JEs and full audit history. */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  Receipt, Plus, X, CheckCircle2, XCircle, DollarSign, RotateCcw, Ban, Send,
+  ArrowLeft, Receipt, Plus, X, CheckCircle2, XCircle, DollarSign, RotateCcw, Ban, Send,
   Sparkles, Upload, Loader2,
 } from "lucide-react";
 import { api, API_BASE } from "@/lib/api";
@@ -32,6 +32,12 @@ interface LineSpec {
   description: string;
   amount: string;
   tax_code: string;
+}
+
+interface AbsorbedLine {
+  description: string;
+  amount: string;
+  absorbed_note: string;
 }
 
 interface Bill {
@@ -76,6 +82,17 @@ function badge(status: string) {
 
 
 export default function BillsPage() {
+  // useSearchParams() forces this component into client-side bailout
+  // during static export. Wrapping the inner content in <Suspense>
+  // lets Next.js emit a placeholder for the build.
+  return (
+    <Suspense fallback={<p className="text-sm text-gray-400 py-8 text-center">Loading…</p>}>
+      <BillsPageContent />
+    </Suspense>
+  );
+}
+
+function BillsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [bills, setBills] = useState<Bill[]>([]);
@@ -140,6 +157,12 @@ export default function BillsPage() {
 
   return (
     <div>
+      <Link
+        href="/dashboard/accounting"
+        className="inline-flex items-center text-xs text-gray-500 hover:text-gray-800 mb-3"
+      >
+        <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back to Accounting
+      </Link>
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
@@ -398,11 +421,71 @@ function CreateBillDrawer({
   const [aiPct, setAiPct] = useState(0);
   const [aiWarnings, setAiWarnings] = useState<string[]>([]);
   const [aiSource, setAiSource] = useState<{ filename: string; model: string } | null>(null);
+  // Thomas 2026-05-12 (Sunrise case): the AI reported invoice total. We
+  // stash it so we can deterministically verify that the user's saved
+  // bill (sum of lines + VAT) reconciles to what was on the document.
+  // If they don't match, the save is blocked — the JE would not have
+  // tied to the invoice. Cleared on manual reset.
+  const [aiInvoiceTotal, setAiInvoiceTotal] = useState<string | null>(null);
+  // B5 — LearningRules the AI followed on this extraction. Rendered as
+  // chips so the reviewer can see "Beakon followed Rule #N" before
+  // creating the draft. Cleared on subsequent extractions or manual reset.
+  const [appliedRules, setAppliedRules] = useState<Array<{
+    id: number;
+    vendor_code: string | null;
+    vendor_name: string | null;
+    scope_label: string;
+    correction_type: string;
+    human_instruction: string;
+  }>>([]);
+  // B7 — absorbed lines from the AI (Sunrise device instalment case).
+  // Kept out of the editable `lines` state so they don't post; rendered
+  // as struck-through info rows under the lines table for audit trail.
+  const [absorbedLines, setAbsorbedLines] = useState<AbsorbedLine[]>([]);
+  // B7 — customer number printed on the invoice and the AI's draft
+  // future-rule text. Both feed the Teach Beakon panel when the
+  // reviewer opens it from the extract banner.
+  const [aiCustomerNumber, setAiCustomerNumber] = useState("");
+  const [aiSuggestedRule, setAiSuggestedRule] = useState("");
+  // Captured AI extraction snapshot — frozen at extract time so we can
+  // pass it to BillCorrection.ai_proposal_snapshot if the reviewer
+  // teaches Beakon. Includes vendor name, total, and line items so the
+  // audit row preserves what the AI originally proposed even after the
+  // human edits.
+  const [aiSnapshot, setAiSnapshot] = useState<Record<string, unknown> | null>(null);
+  // B7 — the Teach panel itself. errorTypes use the same 9 checkbox
+  // taxonomy as the post-creation correction flow on /bills/[id].
+  const [teachOpen, setTeachOpen] = useState(false);
+  const [errorTypes, setErrorTypes] = useState<string[]>([]);
+  const [futureRuleInstruction, setFutureRuleInstruction] = useState("");
+  const [teachScopeHint, setTeachScopeHint] = useState("");
+  const [applyToFutureRule, setApplyToFutureRule] = useState(true);
   // We hold the actual File the AI extracted from in component state so
   // that when the user clicks "Create draft" we can also upload it as a
   // bill attachment. The same row will get stamped with journal_entry_id
   // when the bill is approved (BillService.transfer_bill_documents_to_je).
   const [aiReceiptFile, setAiReceiptFile] = useState<File | null>(null);
+  // When the AI suggested an expense account but it didn't pass server-side
+  // validation against this entity's CoA, show what AI was thinking inline
+  // beneath the (now-empty) line dropdown so the reviewer can pick the
+  // closest valid match instead of staring at a blank field.
+  const [aiSuggestedAccount, setAiSuggestedAccount] = useState<
+    | { id: number; code: string | null; name: string | null;
+        on_other_entity: boolean; is_active: boolean | null;
+        reasoning: string }
+    | null
+  >(null);
+  // B8 — ranked alternative account candidates from the AI, already
+  // validated server-side against this entity's CoA. Rendered as
+  // clickable chips under any empty line dropdown so the reviewer
+  // doesn't have to scroll the full chart when the AI was unsure.
+  const [accountCandidates, setAccountCandidates] = useState<Array<{
+    id: number;
+    code: string;
+    name: string;
+    score: number;
+    reason: string;
+  }>>([]);
   // When AI extracts a vendor name that doesn't match any Vendor record,
   // capture it so we can show a "Create this vendor" approval button.
   // Cleared once the user creates the vendor or picks a different one.
@@ -473,8 +556,33 @@ function CreateBillDrawer({
 
     setAiWarnings(event.warnings || []);
     setAiSource({ filename: file.name, model: ex.model_used || "unknown" });
+    // Stash the AI's reported invoice total for the reconciliation guard.
+    // Cleared on subsequent extractions or manual reset.
+    setAiInvoiceTotal(ex.total ? String(ex.total) : null);
+    // B5: capture any LearningRules that fired on this extraction.
+    setAppliedRules(Array.isArray(event.applied_rules) ? event.applied_rules : []);
     // Stash the original receipt so we can attach it to the bill on save.
     setAiReceiptFile(file);
+    // B8 — server-validated alternative account picks. Always
+    // captured: even when matched_account_id is set, the reviewer
+    // may want to swap to a different account for one of the lines.
+    setAccountCandidates(Array.isArray(event.account_candidates) ? event.account_candidates : []);
+    // Capture AI's account suggestion ONLY when the server failed to
+    // resolve it against this entity's CoA — otherwise the dropdown is
+    // already filled and the hint would be noise.
+    const sai = event.suggested_account_info;
+    if (sai && !event.matched_account_id) {
+      setAiSuggestedAccount({
+        id: sai.id,
+        code: sai.code ?? null,
+        name: sai.name ?? null,
+        on_other_entity: !!sai.on_other_entity,
+        is_active: sai.is_active ?? null,
+        reasoning: sai.reasoning || ex.suggested_account_reasoning || "",
+      });
+    } else {
+      setAiSuggestedAccount(null);
+    }
     // If no Vendor matched but the AI did extract a vendor name,
     // surface the "create this vendor" approval button below.
     if (!matchedVendor && ex.vendor_name) {
@@ -518,13 +626,85 @@ function CreateBillDrawer({
     // category (e.g. all four office-supply lines → Operating Expenses).
     // The reviewer can change individual lines if a particular item
     // belongs in a different account.
-    const items = ex.line_items || [];
+    //
+    // B7 — partition extracted line items into POSTING lines (these go
+    // into the editable form) and ABSORBED lines (informational
+    // duplicates the AI flagged, e.g. Sunrise device instalment that's
+    // already inside the Mobile total). Absorbed lines render as
+    // struck-through audit rows; they're never posted.
+    const allItems = ex.line_items || [];
+    const items = allItems.filter((li: any) => !li.is_absorbed);
+    const absorbed = allItems.filter((li: any) => li.is_absorbed);
+    setAbsorbedLines(absorbed.map((li: any) => ({
+      description: li.description || "",
+      amount: String(li.amount || "0"),
+      absorbed_note: li.absorbed_note || "Already counted in another line",
+    })));
+    // B7 — capture customer number + AI's suggested rule for the Teach
+    // panel. Pre-seed the panel's scope hint so the reviewer doesn't
+    // have to retype the subscriber number.
+    setAiCustomerNumber(ex.customer_number || "");
+    setAiSuggestedRule(ex.suggested_rule_text || "");
+    setTeachScopeHint(ex.customer_number ? `Customer number: ${ex.customer_number}` : "");
+    setFutureRuleInstruction(ex.suggested_rule_text || "");
+    // Freeze the AI proposal so we can attach it to a BillCorrection if
+    // the reviewer teaches Beakon from this draft.
+    setAiSnapshot({
+      vendor_name: ex.vendor_name,
+      invoice_number: ex.invoice_number,
+      total: ex.total,
+      subtotal: ex.subtotal,
+      tax_amount: ex.tax_amount,
+      currency: ex.currency,
+      line_items: allItems,
+      customer_number: ex.customer_number || "",
+      suggested_account_id: ex.suggested_account_id || null,
+      suggested_account_reasoning: ex.suggested_account_reasoning || "",
+      model_used: ex.model_used,
+    });
+    // B7 — auto-open the Teach panel when the AI flagged something
+    // worth correcting (duplicate/absorbed lines, or it drafted a rule
+    // for the reviewer to consider). This is the Sunrise-style path:
+    // the AI itself raises its hand and asks for a rule to be saved.
+    const aiFlagged = absorbed.length > 0 || !!(ex.suggested_rule_text || "").trim();
+    setTeachOpen(aiFlagged);
+    // Pre-check Duplicate line when the AI marked absorbed entries —
+    // the reviewer is confirming the AI's own detection rather than
+    // flagging a new error.
+    setErrorTypes(absorbed.length > 0 ? ["duplicate_line"] : []);
+    setApplyToFutureRule(true);
     const matchedAccountId = event.matched_account_id ? String(event.matched_account_id) : "";
     if (items.length > 0) {
-      setLines(items.map((li: any) => ({
+      // VAT safeguard: line amounts MUST be NET of VAT (matching subtotal).
+      // If the AI returned gross figures, scale them pro-rata to sum to
+      // the extracted subtotal — protects against the "DR expense gross +
+      // DR VAT + CR AP gross+VAT" double-count bug.
+      const rawAmounts = items.map((li: any) => parseFloat(li.amount) || 0);
+      const sumLines = rawAmounts.reduce((s: number, n: number) => s + n, 0);
+      const sub = parseFloat(ex.subtotal || "0") || 0;
+      const tax = parseFloat(ex.tax_amount || "0") || 0;
+      const tol = 0.02;
+      let normalisedAmounts = rawAmounts;
+      if (sub > 0 && Math.abs(sumLines - sub) > tol) {
+        // Likely cause: AI returned gross. Detect by checking if the sum
+        // matches subtotal+tax (gross), and rescale to subtotal.
+        if (tax > 0 && Math.abs(sumLines - (sub + tax)) <= tol && sumLines > 0) {
+          const scale = sub / sumLines;
+          normalisedAmounts = rawAmounts.map(
+            (n: number) => Math.round(n * scale * 100) / 100,
+          );
+          // Fix rounding drift on the last line so the sum is exact.
+          const drift = sub - normalisedAmounts.reduce((s: number, n: number) => s + n, 0);
+          if (normalisedAmounts.length > 0) {
+            normalisedAmounts[normalisedAmounts.length - 1] =
+              Math.round((normalisedAmounts[normalisedAmounts.length - 1] + drift) * 100) / 100;
+          }
+        }
+      }
+      setLines(items.map((li: any, i: number) => ({
         expense_account: matchedAccountId,
         description: li.description || "",
-        amount: li.amount || "",
+        amount: normalisedAmounts[i] > 0 ? normalisedAmounts[i].toFixed(2) : (li.amount || ""),
         tax_code: "",
       })));
     } else if (ex.subtotal && ex.subtotal !== "0") {
@@ -666,9 +846,42 @@ function CreateBillDrawer({
   const taxNum = lineLevelTax.any ? lineLevelTax.total : (parseFloat(form.tax_amount) || 0);
   const total = lineSum + taxNum;
 
-  const submit = async (ev: React.FormEvent) => {
-    ev.preventDefault();
+  // Thomas 2026-05-12 (Sunrise case): deterministic reconciliation
+  // guard. If we have an AI-reported invoice total, the user's saved
+  // lines + VAT MUST equal it. Returns null if reconciled, otherwise an
+  // explanation string used to render the error banner and block save.
+  const reconcileError = useMemo<string | null>(() => {
+    if (!aiInvoiceTotal) return null;
+    const target = parseFloat(aiInvoiceTotal);
+    if (!Number.isFinite(target) || target <= 0) return null;
+    const computed = lineSum + taxNum;
+    const diff = computed - target;
+    if (Math.abs(diff) <= 0.02) return null;
+    const ccy = form.currency || "";
+    const sign = diff > 0 ? "+" : "";
+    return (
+      `Lines + VAT come to ${ccy} ${computed.toFixed(2)}, but the invoice ` +
+      `total is ${ccy} ${target.toFixed(2)} (${sign}${diff.toFixed(2)} mismatch). ` +
+      `Check for duplicate lines or a misread amount before saving.`
+    );
+  }, [aiInvoiceTotal, lineSum, taxNum, form.currency]);
+
+  // B7 — when the Teach panel is open, the footer's two action buttons
+  // (Fix this draft only / Apply correction & remember rule) flip this
+  // flag before triggering the form submit so we know whether to also
+  // post a BillCorrection after the bill lands.
+  const [teachMode, setTeachMode] = useState<"draft_only" | "remember" | null>(null);
+
+  const requestSubmit = () => {
+    void submitCore();
+  };
+
+  const submitCore = async () => {
     if (!form.entity || !form.vendor || lines.length === 0) return;
+    if (reconcileError) {
+      setErr(reconcileError);
+      return;
+    }
     setBusy(true);
     setErr(null);
     const payload: any = {
@@ -679,10 +892,6 @@ function CreateBillDrawer({
       currency: form.currency || undefined,
       description: form.description,
       explanation: form.explanation,
-      // When the bill was prefilled from AI receipt extraction, mark
-      // the notes with a parseable prefix so the list can show a ✨ icon
-      // and the audit trail records which model produced the draft.
-      // Format: [AI-EXTRACTED:<model>] — kept stable for serializer regex.
       ...(aiSource && {
         notes: `[AI-EXTRACTED:${aiSource.model}] from ${aiSource.filename}`,
       }),
@@ -698,9 +907,11 @@ function CreateBillDrawer({
           return spec;
         }),
     };
-    // Only send manual tax_amount when no per-line tax_code is set.
     if (!lineLevelTax.any) payload.tax_amount = form.tax_amount;
     if (form.due_date) payload.due_date = form.due_date;
+    if (appliedRules.length > 0) {
+      payload.ai_applied_rule_ids = appliedRules.map((r) => r.id);
+    }
     if (payload.lines.length === 0) {
       setErr("Add at least one line with an expense account and amount.");
       setBusy(false);
@@ -708,11 +919,7 @@ function CreateBillDrawer({
     }
     try {
       const created = await api.post<{ id: number }>("/beakon/bills/", payload);
-      // If the user uploaded a receipt for AI extraction, persist it as
-      // an attachment on the bill. It auto-transfers to the JE when the
-      // bill is approved (BillService.transfer_bill_documents_to_je).
-      // Failing the upload should NOT block the bill creation — surface
-      // a non-fatal warning instead.
+      // Persist the original receipt as a bill attachment.
       if (aiReceiptFile && created?.id) {
         try {
           const fd = new FormData();
@@ -726,8 +933,32 @@ function CreateBillDrawer({
             method: "POST", headers, body: fd,
           });
         } catch {
-          // Non-fatal: bill is created; user can re-upload from the JE
-          // detail page after approval if needed.
+          // Non-fatal — user can re-upload later.
+        }
+      }
+      // B7 — if the reviewer used the Teach panel, also POST a
+      // BillCorrection so the audit row + (optionally) the LearningRule
+      // land alongside the bill. teachMode = "remember" promotes the
+      // rule; "draft_only" records the correction but skips promotion.
+      if (created?.id && teachOpen && teachMode) {
+        try {
+          const summary = errorTypes.length > 0
+            ? `Reviewer flagged: ${errorTypes.map((t) => t.replace(/_/g, " ")).join(", ")}.`
+            : "Reviewer corrected the AI draft before saving.";
+          const correctionPayload: Record<string, unknown> = {
+            correction_text: summary,
+            ai_proposal_snapshot: aiSnapshot ?? {},
+            error_types: errorTypes,
+            make_reusable_rule: teachMode === "remember" && applyToFutureRule,
+            future_rule_instruction:
+              teachMode === "remember" ? futureRuleInstruction.trim() : "",
+          };
+          await api.post(`/beakon/bills/${created.id}/corrections/`, correctionPayload);
+        } catch (e) {
+          // Non-fatal: bill is saved. Surface a soft warning but don't
+          // block the flow — the reviewer can file the correction
+          // manually from the bill detail page if this errored.
+          console.warn("Correction POST failed:", e);
         }
       }
       await onCreated();
@@ -735,7 +966,13 @@ function CreateBillDrawer({
       setErr(e?.error?.message || JSON.stringify(e?.detail || e || "Failed"));
     } finally {
       setBusy(false);
+      setTeachMode(null);
     }
+  };
+
+  const submit = (ev: React.FormEvent) => {
+    ev.preventDefault();
+    void submitCore();
   };
 
   const updateLine = (i: number, patch: Partial<typeof lines[0]>) => {
@@ -754,7 +991,16 @@ function CreateBillDrawer({
   return (
     <div className="fixed inset-0 z-40 flex" role="dialog" aria-modal="true">
       <div className="flex-1 bg-black/30" onClick={onClose} />
-      <div className="w-full sm:w-[640px] bg-white border-l border-canvas-200 overflow-y-auto">
+      <div
+        className={
+          "bg-white border-l border-canvas-200 flex transition-all duration-200 " +
+          (teachOpen ? "w-full sm:w-[1120px]" : "w-full sm:w-[640px]")
+        }
+      >
+        <div className={
+          (teachOpen ? "w-[640px] shrink-0 border-r border-canvas-100" : "flex-1") +
+          " overflow-y-auto"
+        }>
         <div className="flex items-center justify-between p-4 border-b border-canvas-100">
           <h2 className="text-base font-semibold">New Bill</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
@@ -819,14 +1065,58 @@ function CreateBillDrawer({
             )}
             {!aiBusy && aiSource && (
               <div>
-                <p className="text-xs text-gray-700 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-brand-600" />
-                  AI-extracted from <span className="font-mono text-gray-900">{aiSource.filename}</span>
-                  <span className="text-gray-400">via {aiSource.model}</span>
-                </p>
-                <p className="text-[11px] text-gray-500 mt-0.5">
-                  Review every field below before saving — AI drafts a bill, the human approves it.
-                </p>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-700 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-brand-600" />
+                      AI-extracted from <span className="font-mono text-gray-900 truncate">{aiSource.filename}</span>
+                      <span className="text-gray-400">via {aiSource.model}</span>
+                    </p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Review every field below before saving — AI drafts a bill, the human approves it.
+                    </p>
+                  </div>
+                  {!teachOpen && (
+                    <button
+                      type="button"
+                      onClick={() => setTeachOpen(true)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 shrink-0"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Correct & teach Beakon
+                    </button>
+                  )}
+                </div>
+                {/* B5: surface any LearningRules the AI followed so the
+                    reviewer knows what shaped the draft. Per Thomas §8:
+                    "the user must be able to see why Beakon applied a
+                    learned rule and override it if needed." */}
+                {appliedRules.length > 0 && (
+                  <div className="mt-2 rounded-md border border-mint-200 bg-mint-50 p-2">
+                    <p className="text-[11px] font-semibold text-mint-800 mb-1">
+                      Beakon followed {appliedRules.length === 1 ? "1 rule" : `${appliedRules.length} rules`} from past corrections
+                    </p>
+                    <ul className="space-y-1">
+                      {appliedRules.map((r) => (
+                        <li
+                          key={r.id}
+                          className="text-[11px] text-mint-900 leading-snug"
+                          title={r.human_instruction}
+                        >
+                          <span className="font-semibold">Rule #{r.id}</span>
+                          {r.scope_label && <span className="text-mint-700"> · {r.scope_label}</span>}
+                          {r.vendor_code && <span className="text-mint-700"> · {r.vendor_code}</span>}
+                          <span className="text-mint-700"> — </span>
+                          <span className="break-words">
+                            {r.human_instruction.length > 140
+                              ? r.human_instruction.slice(0, 140) + "…"
+                              : r.human_instruction}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <button type="button"
                         onClick={() => fileInputRef.current?.click()}
                         className="text-[11px] text-brand-700 hover:underline mt-1">
@@ -943,6 +1233,7 @@ function CreateBillDrawer({
               {lines.map((l, i) => {
                 const tc = taxCodes.find((t) => String(t.id) === l.tax_code);
                 const lineTax = tc ? (Number(l.amount) || 0) * (Number(tc.rate) / 100) : 0;
+                const showAiHint = !l.expense_account && aiSuggestedAccount;
                 return (
                   <div key={i} className="grid grid-cols-12 gap-2 items-start">
                     <select className="input col-span-4" value={l.expense_account}
@@ -968,6 +1259,73 @@ function CreateBillDrawer({
                         <option key={t.id} value={t.id}>{t.code} · {t.rate}%</option>
                       ))}
                     </select>
+                    {showAiHint && (
+                      <div className="col-span-12 -mt-1 text-[11px] rounded border border-amber-200 bg-amber-50 px-2 py-1 leading-snug">
+                        <div className="text-amber-900">
+                          <span className="font-semibold">AI suggested:</span>{" "}
+                          {aiSuggestedAccount.code || aiSuggestedAccount.name ? (
+                            <span className="font-mono">
+                              {aiSuggestedAccount.code}
+                              {aiSuggestedAccount.code && aiSuggestedAccount.name && " · "}
+                              {aiSuggestedAccount.name}
+                            </span>
+                          ) : (
+                            <span className="italic">unknown account id #{aiSuggestedAccount.id}</span>
+                          )}
+                          <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-700">
+                            {aiSuggestedAccount.on_other_entity
+                              ? "on a different entity"
+                              : aiSuggestedAccount.is_active === false
+                                ? "inactive"
+                                : "not on this entity's CoA"}
+                          </span>
+                        </div>
+                        {aiSuggestedAccount.reasoning && (
+                          <div className="text-amber-800/80 mt-0.5">
+                            {aiSuggestedAccount.reasoning}
+                          </div>
+                        )}
+                        <div className="text-amber-800/70 mt-0.5">
+                          Pick the closest matching account from the dropdown above.
+                        </div>
+                      </div>
+                    )}
+                    {/* B8 — clickable ranked candidates. Surface when
+                        the line has no expense account picked yet so
+                        the reviewer can fill it with one click instead
+                        of scrolling the full chart. */}
+                    {!l.expense_account && accountCandidates.length > 0 && (
+                      <div className="col-span-12 -mt-1 rounded border border-violet-200 bg-violet-50/60 p-2">
+                        <p className="text-[11px] font-semibold text-violet-800 mb-1.5 flex items-center gap-1">
+                          <Sparkles className="w-3 h-3" />
+                          Beakon&apos;s top picks — click to use
+                        </p>
+                        <div className="flex flex-col gap-1">
+                          {accountCandidates.map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => updateLine(i, { expense_account: String(c.id) })}
+                              className="flex items-start justify-between gap-2 rounded border border-violet-200 bg-white px-2 py-1 text-left hover:border-violet-400 hover:bg-violet-50 transition-colors"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="text-[11px] font-mono text-gray-900">
+                                  {c.code} · {c.name}
+                                </div>
+                                {c.reason && (
+                                  <div className="text-[10px] text-gray-500 mt-0.5 leading-snug">
+                                    {c.reason}
+                                  </div>
+                                )}
+                              </div>
+                              <span className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-mono font-medium text-violet-700 tabular-nums">
+                                {Math.round(c.score * 100)}%
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {lines.length > 1 && (
                       <button type="button"
                               onClick={() => setLines(lines.filter((_, idx) => idx !== i))}
@@ -979,6 +1337,40 @@ function CreateBillDrawer({
                 );
               })}
             </div>
+            {/* B7 — absorbed (duplicate) lines the AI detected.
+                Rendered with strikethrough so the auditor can see
+                what the AI considered, but they are NOT posted to
+                the JE and never enter the editable `lines` state. */}
+            {absorbedLines.length > 0 && (
+              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50/60 p-2.5">
+                <p className="text-[11px] font-semibold text-amber-900 mb-1.5 flex items-center gap-1.5">
+                  <span className="text-amber-600">⚠</span>
+                  {absorbedLines.length === 1
+                    ? "1 line detected as duplicate / absorbed — not posted:"
+                    : `${absorbedLines.length} lines detected as duplicate / absorbed — not posted:`}
+                </p>
+                <ul className="space-y-1">
+                  {absorbedLines.map((al, i) => (
+                    <li key={i} className="flex items-start justify-between gap-2 text-[11px]">
+                      <span className="text-amber-800 line-through">
+                        <span className="font-medium">{al.description || "Line"}</span>
+                        {al.absorbed_note && (
+                          <span className="not-italic ml-1 text-amber-700/80">— {al.absorbed_note}</span>
+                        )}
+                      </span>
+                      <span className="flex items-center gap-1.5 shrink-0">
+                        <span className="font-mono text-amber-800 line-through tabular-nums">
+                          {fmt2(al.amount)}
+                        </span>
+                        <span className="rounded-full bg-amber-100 border border-amber-300 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 not-italic">
+                          Included above
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           <PostingPreview
@@ -1007,20 +1399,102 @@ function CreateBillDrawer({
             </div>
           </div>
 
-          {err && (
+          {reconcileError && (
+            // Thomas §8: JE total must reconcile to the invoice total
+            // before a draft can be saved. The Sunrise bug surfaces here.
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+              <div className="flex items-start gap-2">
+                <span className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-200 text-amber-900 font-bold text-[10px]">!</span>
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold leading-tight">Doesn&apos;t reconcile to the invoice total</p>
+                  <p className="mt-1 leading-relaxed">{reconcileError}</p>
+                </div>
+              </div>
+            </div>
+          )}
+          {err && !reconcileError && (
             <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700 break-words">
               {err}
             </div>
           )}
-          <div className="pt-2 flex justify-end gap-2">
-            <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
-            <button type="submit"
-                    disabled={busy || !form.entity || !form.vendor || lines.every((l) => !l.amount)}
-                    className="btn-primary">
-              {busy ? "Saving…" : "Create draft"}
-            </button>
+          <div className="pt-2 flex flex-wrap items-center justify-end gap-2">
+            {teachOpen ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { setTeachMode("draft_only"); requestSubmit(); }}
+                  disabled={busy || !form.entity || !form.vendor || lines.every((l) => !l.amount) || !!reconcileError}
+                  className="btn-secondary"
+                  title="Save the corrected bill but don't create a learning rule"
+                >
+                  Fix this draft only
+                </button>
+                <button type="button" onClick={onClose} className="text-xs text-gray-500 hover:text-gray-800 px-2 py-1.5">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setTeachMode("remember"); requestSubmit(); }}
+                  disabled={
+                    busy || !form.entity || !form.vendor || lines.every((l) => !l.amount) ||
+                    !!reconcileError || !futureRuleInstruction.trim() || errorTypes.length === 0
+                  }
+                  className="btn-primary bg-violet-600 hover:bg-violet-700"
+                  title={
+                    errorTypes.length === 0
+                      ? "Pick at least one error type"
+                      : !futureRuleInstruction.trim()
+                        ? "Write what Beakon should do next time"
+                        : "Save the bill and create a learning rule"
+                  }
+                >
+                  {busy ? "Saving…" : "Apply correction & remember rule"}
+                </button>
+              </>
+            ) : (
+              <>
+                <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+                <button type="submit"
+                        disabled={busy || !form.entity || !form.vendor || lines.every((l) => !l.amount) || !!reconcileError}
+                        className="btn-primary">
+                  {busy ? "Saving…" : "Create draft"}
+                </button>
+              </>
+            )}
           </div>
         </form>
+        </div>
+        {/* B7 — Teach Beakon side panel. Opens from the AI-extracted
+            banner. Captures what was wrong, a live JE preview, and an
+            optional rule to remember for the future. Submission goes
+            through the same `submit` handler — teachMode tells it
+            whether to also post a BillCorrection / promote a rule. */}
+        {teachOpen && (
+          <TeachBeakonPanel
+            errorTypes={errorTypes}
+            setErrorTypes={setErrorTypes}
+            futureRuleInstruction={futureRuleInstruction}
+            setFutureRuleInstruction={setFutureRuleInstruction}
+            scopeHint={teachScopeHint}
+            setScopeHint={setTeachScopeHint}
+            applyToFutureRule={applyToFutureRule}
+            setApplyToFutureRule={setApplyToFutureRule}
+            customerNumber={aiCustomerNumber}
+            aiSuggestedRule={aiSuggestedRule}
+            jePreview={{
+              currency: form.currency || "—",
+              netExpense: lineSum,
+              vat: taxNum,
+              vendorName:
+                vendors.find((v) => String(v.id) === form.vendor)?.name ||
+                (aiSnapshot?.vendor_name as string | undefined) ||
+                "vendor",
+              total,
+              reconciled: !reconcileError,
+            }}
+            onClose={() => setTeachOpen(false)}
+          />
+        )}
       </div>
     </div>
   );
@@ -1298,4 +1772,220 @@ function buildAIExplanation(args: {
     parts.push(`AI categoriser: ${args.reasoning}`);
   }
   return parts.join("\n");
+}
+
+
+// ── B7 — Teach Beakon side panel ────────────────────────────────────
+// Mounted next to the New Bill drawer when the reviewer clicks
+// "Correct & teach Beakon". Captures three things:
+//   1. What was wrong (9-checkbox taxonomy)
+//   2. A live preview of the JE the reviewer is about to post
+//   3. An optional rule to remember for the next invoice from this
+//      vendor (pre-filled with the AI's own suggestion when available)
+//
+// The bill creation itself stays in the parent form — this panel is a
+// thin sidekick that contributes to the BillCorrection POST after the
+// bill lands. Submit is driven from the parent footer buttons.
+
+const TEACH_ERROR_TYPES = [
+  { key: "duplicate_line",       label: "Duplicate line" },
+  { key: "vat_treatment_wrong",  label: "VAT treatment wrong" },
+  { key: "wrong_expense_account", label: "Wrong expense account" },
+  { key: "wrong_amount",         label: "Wrong amount" },
+  { key: "missing_allocation",   label: "Missing allocation" },
+  { key: "wrong_vendor",         label: "Wrong vendor" },
+  { key: "wrong_entity",         label: "Wrong entity" },
+  { key: "wrong_period",         label: "Wrong period" },
+  { key: "other",                label: "Other" },
+];
+
+function TeachBeakonPanel({
+  errorTypes, setErrorTypes,
+  futureRuleInstruction, setFutureRuleInstruction,
+  scopeHint, setScopeHint,
+  applyToFutureRule, setApplyToFutureRule,
+  customerNumber, aiSuggestedRule,
+  jePreview,
+  onClose,
+}: {
+  errorTypes: string[];
+  setErrorTypes: (v: string[]) => void;
+  futureRuleInstruction: string;
+  setFutureRuleInstruction: (v: string) => void;
+  scopeHint: string;
+  setScopeHint: (v: string) => void;
+  applyToFutureRule: boolean;
+  setApplyToFutureRule: (v: boolean) => void;
+  customerNumber: string;
+  aiSuggestedRule: string;
+  jePreview: {
+    currency: string;
+    netExpense: number;
+    vat: number;
+    vendorName: string;
+    total: number;
+    reconciled: boolean;
+  };
+  onClose: () => void;
+}) {
+  const toggleError = (key: string) => {
+    if (errorTypes.includes(key)) {
+      setErrorTypes(errorTypes.filter((k) => k !== key));
+    } else {
+      setErrorTypes([...errorTypes, key]);
+    }
+  };
+
+  const StepNumber = ({ n }: { n: number }) => (
+    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-600 text-white text-[11px] font-semibold">
+      {n}
+    </span>
+  );
+
+  return (
+    <div className="flex-1 bg-canvas-50/60 overflow-y-auto">
+      <div className="flex items-center justify-between p-4 border-b border-canvas-100 bg-white">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-violet-100">
+            <Sparkles className="w-4 h-4 text-violet-600" />
+          </span>
+          <h2 className="text-base font-semibold text-gray-900">Teach Beakon</h2>
+        </div>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-700">
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      <div className="p-4 space-y-5">
+        {/* ── Step 1 — what is wrong ── */}
+        <section>
+          <div className="flex items-center gap-2 mb-2">
+            <StepNumber n={1} />
+            <h3 className="text-sm font-semibold text-gray-900">What is wrong?</h3>
+          </div>
+          <div className="space-y-1.5 pl-7">
+            {TEACH_ERROR_TYPES.map((t) => (
+              <label
+                key={t.key}
+                className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={errorTypes.includes(t.key)}
+                  onChange={() => toggleError(t.key)}
+                  className="rounded border-gray-300"
+                />
+                {t.label}
+              </label>
+            ))}
+          </div>
+        </section>
+
+        {/* ── Step 2 — live JE preview ── */}
+        <section>
+          <div className="flex items-center gap-2 mb-2">
+            <StepNumber n={2} />
+            <h3 className="text-sm font-semibold text-gray-900">Correct journal entry</h3>
+          </div>
+          <div className="pl-7">
+            <div className="rounded-md border border-canvas-200 bg-white overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-canvas-100 text-[11px] uppercase tracking-wider text-gray-500">
+                    <th className="text-left font-medium px-3 py-1.5">Account</th>
+                    <th className="text-right font-medium px-3 py-1.5">Amount ({jePreview.currency})</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b border-canvas-100">
+                    <td className="px-3 py-1.5 text-gray-800">Expense (net)</td>
+                    <td className="px-3 py-1.5 text-right font-mono tabular-nums text-gray-900">{fmt2(jePreview.netExpense)}</td>
+                  </tr>
+                  <tr className="border-b border-canvas-100">
+                    <td className="px-3 py-1.5 text-gray-800">Input VAT</td>
+                    <td className="px-3 py-1.5 text-right font-mono tabular-nums text-gray-900">{fmt2(jePreview.vat)}</td>
+                  </tr>
+                  <tr>
+                    <td className="px-3 py-1.5 text-gray-800 font-medium">
+                      Accounts payable — {jePreview.vendorName}
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-mono tabular-nums text-gray-900 font-semibold">
+                      {fmt2(jePreview.total)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            {jePreview.reconciled ? (
+              <p className="mt-1.5 text-[11px] text-emerald-700 flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                JE total reconciles to invoice total.
+              </p>
+            ) : (
+              <p className="mt-1.5 text-[11px] text-amber-700 flex items-center gap-1">
+                <span className="text-amber-600">⚠</span>
+                JE total does not match invoice total — fix the lines on the left.
+              </p>
+            )}
+          </div>
+        </section>
+
+        {/* ── Step 3 — teach for the future ── */}
+        <section>
+          <div className="flex items-center gap-2 mb-2">
+            <StepNumber n={3} />
+            <h3 className="text-sm font-semibold text-gray-900">Teach Beakon for the future</h3>
+          </div>
+          <div className="pl-7 space-y-2.5">
+            <textarea
+              rows={6}
+              value={futureRuleInstruction}
+              onChange={(e) => setFutureRuleInstruction(e.target.value)}
+              placeholder="e.g. For Sunrise invoices, do not add device instalments as a separate expense line when already included in the Mobile total. Use the VAT declaration to split expense and input VAT."
+              className="input w-full text-sm font-mono"
+            />
+            {aiSuggestedRule && futureRuleInstruction !== aiSuggestedRule && (
+              <p className="text-[11px] text-gray-500">
+                <button
+                  type="button"
+                  onClick={() => setFutureRuleInstruction(aiSuggestedRule)}
+                  className="text-violet-700 hover:underline"
+                >
+                  Use Beakon&apos;s draft
+                </button>
+                {" "}— the AI noticed this case while extracting and proposed: &ldquo;
+                <span className="text-gray-600">{aiSuggestedRule.length > 100 ? aiSuggestedRule.slice(0, 100) + "…" : aiSuggestedRule}</span>
+                &rdquo;
+              </p>
+            )}
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={applyToFutureRule}
+                onChange={(e) => setApplyToFutureRule(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Apply this rule to future invoices from this vendor
+            </label>
+            <div>
+              <label className="block">
+                <span className="text-[11px] text-gray-500">Scope (optional)</span>
+                <input
+                  className="input mt-0.5 w-full text-sm"
+                  value={scopeHint}
+                  onChange={(e) => setScopeHint(e.target.value)}
+                  placeholder={customerNumber ? `Customer number: ${customerNumber}` : "e.g. Customer number, contract ref, project code"}
+                />
+              </label>
+              {customerNumber && (
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Pre-filled from the invoice. Cleared if you only want the rule scoped by vendor.
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
 }

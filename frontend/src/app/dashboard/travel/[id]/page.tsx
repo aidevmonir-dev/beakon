@@ -23,7 +23,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import WorkflowBack from "@/components/workflow-back";
 import {
   formatDateRange, formatMoney, STATUS_TONE, StatusPill, TripStatus,
-} from "../page";
+} from "../_lib";
 
 
 interface TripExpense {
@@ -153,11 +153,11 @@ export default function TripClaimDetailPage() {
 
       <div className="mt-2 mb-4">
         <Suspense fallback={<span className="text-sm text-gray-400">Back</span>}>
-          <WorkflowBack fallbackHref="/dashboard/travel" />
+          <WorkflowBack fallbackHref="/dashboard/travel/expenses" />
         </Suspense>
       </div>
 
-      <ClaimHeader claim={claim} meId={meId} onChanged={() => void reload()} onDeleted={() => router.push("/dashboard/travel")} />
+      <ClaimHeader claim={claim} meId={meId} onChanged={() => void reload()} onDeleted={() => router.push("/dashboard/travel/expenses")} />
 
       <ExpensesPanel claim={claim} onChanged={() => void reload()} />
 

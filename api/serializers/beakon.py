@@ -13,7 +13,9 @@ from beakon_core.models import (
     AccountGroup,
     ApprovalAction,
     Bill,
+    BillCorrection,
     BillLine,
+    LearningRule,
     Currency,
     CoADefinition,
     CoAMapping,
@@ -432,8 +434,159 @@ class BillSummarySerializer(serializers.ModelSerializer):
         return bool(obj.notes and obj.notes.startswith("[AI-EXTRACTED:"))
 
 
+class LearningRuleSerializer(serializers.ModelSerializer):
+    vendor_code = serializers.SerializerMethodField()
+    vendor_name = serializers.SerializerMethodField()
+    approved_by_name = serializers.SerializerMethodField()
+    scope_label = serializers.SerializerMethodField()
+    confidence_policy_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LearningRule
+        fields = (
+            "id", "organization", "vendor", "vendor_code", "vendor_name",
+            "customer_number", "entity", "invoice_pattern",
+            "trigger_conditions", "correction_type", "human_instruction",
+            "structured_accounting_logic",
+            "scope", "scope_label",
+            "confidence_policy", "confidence_policy_label",
+            "created_from_invoice", "created_from_correction",
+            "approved_by", "approved_by_name", "approved_at",
+            "last_used", "success_count", "override_count", "is_active",
+            "created_at", "updated_at",
+        )
+        # PATCH whitelist lives on the viewset; the fields below are
+        # always immutable from the API so feedback counters / provenance
+        # can't be hand-edited.
+        read_only_fields = (
+            "id", "organization", "vendor", "vendor_code", "vendor_name",
+            "entity", "scope_label", "confidence_policy_label",
+            "created_from_invoice", "created_from_correction",
+            "approved_by", "approved_by_name", "approved_at",
+            "last_used", "success_count", "override_count", "is_active",
+            "created_at", "updated_at",
+        )
+
+    def get_vendor_code(self, obj):
+        return obj.vendor.code if obj.vendor_id else None
+
+    def get_vendor_name(self, obj):
+        return obj.vendor.name if obj.vendor_id else None
+
+    def get_approved_by_name(self, obj):
+        u = obj.approved_by
+        if not u:
+            return None
+        full = " ".join(p for p in (u.first_name, u.last_name) if p).strip()
+        return full or (u.email or "").split("@")[0] or None
+
+    def get_scope_label(self, obj):
+        return obj.get_scope_display()
+
+    def get_confidence_policy_label(self, obj):
+        return obj.get_confidence_policy_display()
+
+
+class BillCorrectionSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    vendor_code = serializers.SerializerMethodField()
+    # When a correction was promoted to a LearningRule, embed the resulting
+    # rule so the UI can confirm "rule saved" without a second round trip.
+    promoted_rule = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BillCorrection
+        fields = (
+            "id", "bill", "vendor", "vendor_code",
+            "correction_text", "error_types",
+            "make_reusable_rule", "future_rule_instruction",
+            "promoted_rule",
+            "ai_proposal_snapshot",
+            "created_by", "created_by_name", "created_at",
+        )
+        read_only_fields = (
+            "id", "bill", "vendor", "vendor_code", "promoted_rule",
+            "created_by", "created_by_name", "created_at",
+        )
+
+    def get_created_by_name(self, obj):
+        u = obj.created_by
+        if not u:
+            return None
+        full = " ".join(p for p in (u.first_name, u.last_name) if p).strip()
+        return full or (u.email or "").split("@")[0] or None
+
+    def get_vendor_code(self, obj):
+        return obj.vendor.code if obj.vendor_id else None
+
+    def get_promoted_rule(self, obj):
+        rule = obj.promoted_rules.order_by("-created_at").first()
+        if not rule:
+            return None
+        return LearningRuleSerializer(rule).data
+
+
+class JECorrectionSerializer(serializers.ModelSerializer):
+    """Mirrors BillCorrectionSerializer for the JE-level Teach flow.
+
+    Vendor is optional here: a pure manual JE may have no vendor; AI
+    extracted ones carry ``ai_vendor_name`` for audit context.
+    """
+
+    created_by_name = serializers.SerializerMethodField()
+    vendor_code = serializers.SerializerMethodField()
+    promoted_rule = serializers.SerializerMethodField()
+
+    class Meta:
+        from beakon_core.models import JECorrection
+        model = JECorrection
+        fields = (
+            "id", "journal_entry", "vendor", "vendor_code", "ai_vendor_name",
+            "correction_text", "error_types",
+            "make_reusable_rule", "future_rule_instruction",
+            "promoted_rule",
+            "ai_proposal_snapshot",
+            "created_by", "created_by_name", "created_at",
+        )
+        read_only_fields = (
+            "id", "journal_entry", "vendor", "vendor_code", "promoted_rule",
+            "created_by", "created_by_name", "created_at",
+        )
+
+    def get_created_by_name(self, obj):
+        u = obj.created_by
+        if not u:
+            return None
+        full = " ".join(p for p in (u.first_name, u.last_name) if p).strip()
+        return full or (u.email or "").split("@")[0] or None
+
+    def get_vendor_code(self, obj):
+        return obj.vendor.code if obj.vendor_id else None
+
+    def get_promoted_rule(self, obj):
+        # LearningRule doesn't carry a JECorrection back-pointer yet (a
+        # later migration adds `created_from_je_correction`). For now we
+        # heuristically return the most recent vendor-scoped rule when
+        # the correction promoted one; if no vendor, no rule was promoted.
+        if not obj.make_reusable_rule or not obj.vendor_id:
+            return None
+        from beakon_core.models import LearningRule
+        rule = (
+            LearningRule.objects
+            .filter(
+                organization=obj.organization,
+                vendor=obj.vendor,
+                created_at__gte=obj.created_at,
+            )
+            .order_by("created_at")
+            .first()
+        )
+        return LearningRuleSerializer(rule).data if rule else None
+
+
 class BillDetailSerializer(BillSummarySerializer):
     lines = BillLineSerializer(many=True, read_only=True)
+    corrections = BillCorrectionSerializer(many=True, read_only=True)
     documents = serializers.SerializerMethodField()
     accrual_journal_entry_number = serializers.SerializerMethodField()
     payment_journal_entry_number = serializers.SerializerMethodField()
@@ -442,6 +595,7 @@ class BillDetailSerializer(BillSummarySerializer):
     class Meta(BillSummarySerializer.Meta):
         fields = BillSummarySerializer.Meta.fields + (
             "description", "explanation", "notes", "lines", "documents",
+            "corrections",
             "accrual_journal_entry_number", "payment_journal_entry_number",
             "payment_bank_account", "payment_bank_account_code", "payment_reference",
             "submitted_by", "submitted_at",
@@ -485,6 +639,13 @@ class BillCreateSerializer(serializers.Serializer):
     )
     tax_amount = serializers.DecimalField(max_digits=19, decimal_places=4, required=False)
     lines = serializers.ListField(child=serializers.DictField(), allow_empty=False)
+    # B6 — IDs of LearningRules the AI followed when prefilling this
+    # draft. Empty for manually-created bills. Drives the success/override
+    # counters in the rules registry.
+    ai_applied_rule_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False, default=list,
+    )
 
 
 class BillPaymentSerializer(serializers.Serializer):
@@ -826,7 +987,7 @@ class JournalEntrySummarySerializer(serializers.ModelSerializer):
         model = JournalEntry
         fields = (
             "id", "entry_number", "entity", "entity_code", "date",
-            "status", "source_type", "source_ref", "memo", "explanation",
+            "status", "source_type", "source_id", "source_ref", "memo", "explanation",
             "currency", "total_debit_functional", "total_credit_functional",
             "period", "period_name",
             "vendor", "vendor_code", "vendor_name",

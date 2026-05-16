@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Beakon — JE Page Redesign FAQ</title>
+<style>
+        :root { color-scheme: light; }
+        * { box-sizing: border-box; }
+        body { font: 13px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+               color: #1f2937; background: #fff; max-width: 1080px;
+               margin: 28px auto; padding: 0 24px; }
+        h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
+        h2 { font-size: 20px; margin: 32px 0 12px;
+             padding-bottom: 6px; border-bottom: 2px solid #0f172a;
+             color: #0f172a; }
+        h3 { font-size: 15px; margin: 22px 0 6px; color: #1d4ed8; }
+        h4 { font-size: 13px; margin: 16px 0 4px; color: #334155;
+             text-transform: uppercase; letter-spacing: 0.04em; }
+        p  { margin: 6px 0; }
+        ul { margin: 4px 0; padding-left: 22px; }
+        li { margin: 2px 0; }
+        blockquote { margin: 8px 0; padding: 8px 14px;
+                     background: #f0f9ff; border-left: 3px solid #0ea5e9;
+                     color: #0c4a6e; font-size: 12.5px; }
+        code { font: 12px ui-monospace, "SF Mono", "Cascadia Code", monospace;
+               background: #f1f5f9; padding: 1px 6px; border-radius: 4px;
+               color: #0f172a; }
+        pre { background: #0f172a; color: #f8fafc; padding: 12px 16px;
+              border-radius: 6px; overflow-x: auto; font-size: 12px;
+              line-height: 1.45; }
+        pre code { background: transparent; padding: 0; color: inherit; }
+        h3 code { background: transparent; padding: 0; color: #1d4ed8;
+                  font-weight: 600; }
+        table { border-collapse: collapse; width: 100%; margin: 8px 0 18px;
+                font-size: 12.5px; }
+        th, td { border: 1px solid #e5e7eb; padding: 6px 9px; text-align: left;
+                 vertical-align: top; }
+        th { background: #f8fafc; font-weight: 600; color: #334155;
+             font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+        td code { font-size: 11.5px; }
+        hr { border: 0; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+        em { color: #6366f1; font-style: italic; }
+        strong { color: #0f172a; }
+
+        .meta { color: #64748b; font-size: 12px; margin: 6px 0 0; }
+        .meta b { color: #334155; font-weight: 600; }
+        .rec { background: #ecfdf5; border-left: 3px solid #10b981;
+               padding: 6px 12px; margin: 6px 0; color: #065f46;
+               font-size: 12.5px; border-radius: 0 4px 4px 0; }
+        .rec b { color: #047857; }
+        .qbox { background: #fafafa; border: 1px solid #e5e7eb;
+                border-radius: 6px; padding: 12px 16px; margin: 10px 0 18px; }
+        .qbox h3 { margin-top: 0; }
+        .badge { display: inline-block; padding: 1px 8px; border-radius: 999px;
+                 font-size: 10.5px; font-weight: 600; letter-spacing: .03em;
+                 text-transform: uppercase; vertical-align: 1px; margin-left: 6px; }
+        .badge-req { background: #fee2e2; color: #991b1b; }
+        .badge-rec { background: #fef3c7; color: #92400e; }
+        .badge-opt { background: #e5e7eb; color: #374151; }
+        .badge-cond { background: #fed7aa; color: #9a3412; }
+        .note { background: #fffbeb; border-left: 3px solid #f59e0b;
+                padding: 8px 14px; margin: 8px 0; color: #78350f;
+                font-size: 12.5px; }
+
+        @media print {
+          body { margin: 0; padding: 12mm 14mm; max-width: none; }
+          h2 { break-before: auto; break-after: avoid; }
+          h3, h4 { break-after: avoid; }
+          table, pre, blockquote, .qbox, .rec, .note { break-inside: avoid; }
+          tr { break-inside: avoid; }
+          a { color: inherit; text-decoration: none; }
+        }
+    </style>
+</head>
+<body>
+
+<h1>Journal Entry page redesign — FAQ</h1>
+<p class="meta">
+  <b>Subject:</b> Sunrise / Revised journal entry mock (2026-06-02 draft) &nbsp;·&nbsp;
+  <b>From:</b> Monirul &nbsp;·&nbsp;
+  <b>Date:</b> 2026-05-16
+</p>
+<p>Confirm the design decisions baked into the mock so we can build with confidence and not loop. Each question has options &mdash; pick one or write yours. Where I have a recommendation it's marked
+<span class="badge badge-rec">Recommended</span>.</p>
+
+<hr>
+
+<h2>0. What we believe the mock is saying</h2>
+<p>Before the questions, here's our reading of the design &mdash; please correct anything wrong.</p>
+<ul>
+  <li>The JE detail page is reorganised into <b>four panels</b>: header (source-doc facts), status (3 cards), lines + dimensions table, and a right rail with 4 tabs (AI reasoning &middot; Prior postings &middot; Correct/Teach &middot; Audit trail).</li>
+  <li><b>Dimensions move from chips to real table columns.</b> Each line shows Cost centre, Project/Mandate, Recharge/Allocation inline.</li>
+  <li>A <b>dimension-policy engine</b> decides per account which dimensions are
+    <span class="badge badge-req">Required</span>
+    <span class="badge badge-rec">Recommended</span>
+    <span class="badge badge-opt">Optional</span>
+    <span class="badge badge-cond">Conditional</span>
+    and shows the result as colour-coded badges. The policy text is human-readable and quotable in the right rail.</li>
+  <li><b>Posting checks</b> (balanced, invoice total, VAT, dimensions) are surfaced as a card &mdash; RSM workpaper-ready evidence.</li>
+  <li><b>LearningRule is now versioned</b> (e.g. <code>Sunrise monthly telecom rule v2.1</code>) and shown explicitly under "Rule applied".</li>
+  <li><b>AI confidence becomes per-line</b>, not just overall.</li>
+  <li><b>Correct/Teach</b> is a tab in the right rail (not a separate modal), and the action splits into <code>Apply to this JE only</code> vs <code>Apply &amp; teach Beakon</code>.</li>
+</ul>
+<div class="note">If any of the above is wrong, the rest of this doc is wrong too &mdash; please flag.</div>
+
+<hr>
+
+<h2>A. Dimension policy engine</h2>
+<p>This is the biggest backend addition. Without it the badge colours and conditional rules can't work.</p>
+
+<div class="qbox">
+  <h3>A.1 &mdash; Policy scope: per account or per account class?</h3>
+  <p>How granular is the policy?</p>
+  <ul>
+    <li><b>Option 1 &mdash; Per individual account.</b> 6220 has its own rule; 6221 has its own. Most flexible, most rows.</li>
+    <li><b>Option 2 &mdash; Per account class / category.</b> All telecom-expense accounts share one rule, all rent accounts share another. Easier to maintain.</li>
+    <li><b>Option 3 &mdash; Per account class with per-account override.</b> Class-level default, individual accounts can override.</li>
+  </ul>
+  <div class="rec"><b>Recommended:</b> Option 3.</div>
+</div>
+
+<div class="qbox">
+  <h3>A.2 &mdash; Policy fields per dimension</h3>
+  <p>For each (account, dimension) pair the policy needs to say:</p>
+  <ul>
+    <li>Status: <code>Required</code> &middot; <code>Recommended</code> &middot; <code>Optional</code> &middot; <code>Not applicable</code></li>
+    <li>Conditional trigger (e.g. "Required if Recharge/Allocation is set")</li>
+    <li>Default value (optional)</li>
+    <li>Explanation text shown on hover</li>
+  </ul>
+  <p>Is this the full set, or are we missing a field?</p>
+</div>
+
+<div class="qbox">
+  <h3>A.3 &mdash; Conditional rules</h3>
+  <p>The mock shows: <em>"Recharge entity required because allocation = Review split"</em>. This implies a small rule language.</p>
+  <ul>
+    <li><b>Option 1 &mdash; Hardcoded conditions</b> (a fixed list: "if allocation set", "if intercompany", "if VAT recoverable"). Cheap, limited.</li>
+    <li><b>Option 2 &mdash; Expression-based</b> (JSON like <code>{"if": {"recharge_allocation": "any"}, "then": "required"}</code>). Flexible, more UI work.</li>
+    <li><b>Option 3 &mdash; Start hardcoded; promote to expression-based at the 5th condition.</b></li>
+  </ul>
+  <div class="rec"><b>Recommended:</b> Option 3.</div>
+</div>
+
+<div class="qbox">
+  <h3>A.4 &mdash; Who edits the policy?</h3>
+  <ul>
+    <li>Beakon admin only?</li>
+    <li>Per-entity, the entity's controller can edit?</li>
+    <li>Read-only and the policy ships with the CoA template?</li>
+  </ul>
+  <p>Matters for the association CoA when it arrives.</p>
+</div>
+
+<hr>
+
+<h2>B. Per-line AI confidence and dimension status</h2>
+
+<div class="qbox">
+  <h3>B.1 &mdash; Where does per-line confidence come from?</h3>
+  <p>The mock shows different confidence per line (78 / 90 / 95 / 95).</p>
+  <ul>
+    <li><b>From the OCR/extraction model</b> &mdash; we ask the AI to return confidence per line.</li>
+    <li><b>Computed by us</b> &mdash; based on how many policy fields are filled, account match quality, vendor history match.</li>
+    <li><b>Hybrid</b> &mdash; AI returns extraction confidence; we adjust based on policy completion.</li>
+  </ul>
+  <div class="rec"><b>Recommended:</b> Hybrid.</div>
+</div>
+
+<div class="qbox">
+  <h3>B.2 &mdash; "Dim. status" column values</h3>
+  <p>The mock shows: <code>Complete</code> &middot; <code>Missing required</code> &middot; <code>Not required</code>. Should we also have <code>Missing recommended</code> (yellow), or fold it into <code>Complete</code>?</p>
+</div>
+
+<div class="qbox">
+  <h3>B.3 &mdash; "Review split" yellow state</h3>
+  <p>When does a line enter "Review split"? Our reading:</p>
+  <ul>
+    <li>AI detected the line might span multiple recharge allocations and isn't sure how to split.</li>
+    <li>Different from "Missing required" &mdash; the field has a <em>proposed</em> value but needs user sign-off.</li>
+  </ul>
+  <p>Confirm or correct?</p>
+</div>
+
+<hr>
+
+<h2>C. LearningRule, RuleApplied, prior postings</h2>
+
+<div class="qbox">
+  <h3>C.1 &mdash; Rule versioning</h3>
+  <p><em>"Sunrise monthly telecom rule v2.1"</em> implies versioned rules.</p>
+  <ul>
+    <li><b>Option 1 &mdash; Edit mints a new version, old versions retained.</b> Audit-friendly.</li>
+    <li><b>Option 2 &mdash; In-place update, no history.</b> Simpler.</li>
+    <li><b>Option 3 &mdash; Edits create new versions; minor / cosmetic edits don't.</b> Hybrid.</li>
+  </ul>
+  <div class="rec"><b>Recommended:</b> Option 1, given RSM.</div>
+</div>
+
+<div class="qbox">
+  <h3>C.2 &mdash; What gets logged when a rule is applied to a JE?</h3>
+  <p>Today we have <code>LearningRule</code>. The mock implies a <code>RuleApplied</code> log:</p>
+  <ul>
+    <li>rule id, version</li>
+    <li>JE id</li>
+    <li>applied at, applied by (AI/user)</li>
+    <li>confidence score</li>
+  </ul>
+  <p>Confirm the shape?</p>
+</div>
+
+<div class="qbox">
+  <h3>C.3 &mdash; Prior postings &mdash; similarity definition</h3>
+  <p>"Prior postings (11 similar invoices)" &mdash; what makes them similar?</p>
+  <ul>
+    <li>Same vendor?</li>
+    <li>Same vendor + similar amount band?</li>
+    <li>Same vendor + same invoice pattern (line structure)?</li>
+    <li>Same vendor + same recurring schedule?</li>
+  </ul>
+  <div class="rec"><b>Recommended:</b> Vendor + invoice-pattern match, ordered by recency.</div>
+</div>
+
+<div class="qbox">
+  <h3>C.4 &mdash; Suggested changes &mdash; where do they come from?</h3>
+  <p>"2 suggestions" in the right rail &mdash; are they:</p>
+  <ul>
+    <li>Differences between AI draft and current state of the rule?</li>
+    <li>Differences between this JE and prior postings for the same rule?</li>
+    <li>Both, deduplicated?</li>
+  </ul>
+</div>
+
+<hr>
+
+<h2>D. Audit trail and approval</h2>
+
+<div class="qbox">
+  <h3>D.1 &mdash; Per-line approver vs per-JE approver</h3>
+  <p>The mock shows "Approval owner: Thomas Meyer" inside the dimension panel for a single line. Is this:</p>
+  <ul>
+    <li>A per-line approver (more granular state machine)?</li>
+    <li>A per-JE approver, surfaced in the dimension panel for context only?</li>
+    <li>A per-account-policy approver routing (this account always requires Thomas)?</li>
+  </ul>
+  <div class="rec"><b>Recommended:</b> Per-JE approver field, displayed inside dimensions for visibility; per-line approval is too much for v1.</div>
+</div>
+
+<div class="qbox">
+  <h3>D.2 &mdash; "Created by Beakon AI" vs "Created by Alex AI"</h3>
+  <p>The header says "Created by Beakon AI"; the footer says "Created by Alex AI". Two questions:</p>
+  <ul>
+    <li>Are we tracking which AI agent (Beakon vs Alex) authored the draft?</li>
+    <li>Or is one the "system" and the other "the specific run"?</li>
+  </ul>
+  <p>Need a glossary for the audit log.</p>
+</div>
+
+<div class="qbox">
+  <h3>D.3 &mdash; Audit trail tab &mdash; content</h3>
+  <p>What goes on the Audit trail tab?</p>
+  <ul>
+    <li>Every state transition (draft &rarr; pending &rarr; approved &rarr; posted)?</li>
+    <li>Every line edit (before/after values)?</li>
+    <li>Every dimension edit?</li>
+    <li>Every rule application?</li>
+  </ul>
+  <div class="rec"><b>Recommended:</b> All of the above, filtered by category.</div>
+</div>
+
+<hr>
+
+<h2>E. UI / information architecture</h2>
+
+<div class="qbox">
+  <h3>E.1 &mdash; "Mixed / summary" VAT code</h3>
+  <p>Lines 1 and 2 show VAT code "Mixed / summary". Is this:</p>
+  <ul>
+    <li>A real <code>tax_code</code> value used when sublines have different VAT?</li>
+    <li>A <em>displayed</em> label when the line is a roll-up of sub-VAT-amounts?</li>
+    <li>A signal that the user needs to split the line?</li>
+  </ul>
+</div>
+
+<div class="qbox">
+  <h3>E.2 &mdash; "Apply same to similar lines" vs "Apply &amp; teach Beakon"</h3>
+  <ul>
+    <li><code>Apply same to similar lines</code> &mdash; apply this dimension set to other lines in <em>this</em> JE.</li>
+    <li><code>Apply &amp; teach Beakon</code> &mdash; save the rule so it applies to <em>future</em> JEs.</li>
+  </ul>
+  <p>Confirm scope of each?</p>
+</div>
+
+<div class="qbox">
+  <h3>E.3 &mdash; Re-analyze button</h3>
+  <p>What does Re-analyze do?</p>
+  <ul>
+    <li>Re-run OCR on the source file?</li>
+    <li>Re-run AI proposal using the current rule set?</li>
+    <li>Both?</li>
+  </ul>
+</div>
+
+<div class="qbox">
+  <h3>E.4 &mdash; Source evidence card &mdash; page-level deep links</h3>
+  <p>"Invoice summary page &middot; VAT declaration page &middot; Product / services page" &mdash; each links to a specific page of the source PDF. We don't extract these today.</p>
+  <ul>
+    <li>Should the OCR pipeline mark page roles (summary / VAT / line items / appendix)?</li>
+    <li>Or do we just split the PDF into pages and let the user pick?</li>
+  </ul>
+  <div class="rec"><b>Recommended:</b> OCR labels pages as a side-output; we render the labels we got.</div>
+</div>
+
+<hr>
+
+<h2>F. Build order and sequencing</h2>
+<p>The redesign is roughly a 3&ndash;4 week build. We want to ship in slices that each give RSM something to look at.</p>
+
+<div class="qbox">
+  <h3>F.1 &mdash; Proposed slice order</h3>
+  <table>
+    <thead><tr><th>Week</th><th>Scope</th><th>RSM-visible artefact</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>1 &mdash; Backbone</b></td>
+        <td>Dimension policy model + per-line dimension columns + posting checks card</td>
+        <td>Every JE provably balances and reconciles</td>
+      </tr>
+      <tr>
+        <td><b>2 &mdash; Right rail tabs</b></td>
+        <td>AI reasoning &middot; Prior postings &middot; Correct/Teach refactor &middot; Audit trail</td>
+        <td>Full audit trail per JE</td>
+      </tr>
+      <tr>
+        <td><b>3 &mdash; Intelligence</b></td>
+        <td>Per-line confidence, rule versioning, "Apply to similar lines" / "Apply &amp; teach", suggested changes</td>
+        <td>Versioned rule application history</td>
+      </tr>
+      <tr>
+        <td><b>4 &mdash; Polish + evidence</b></td>
+        <td>Source-evidence card with page-role labels, Re-analyze, dim-status reasons</td>
+        <td>Page-level source linking</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>Right order? Anything to front-load or defer?</p>
+</div>
+
+<div class="qbox">
+  <h3>F.2 &mdash; What's the hard deadline?</h3>
+  <ul>
+    <li>The association client go-live?</li>
+    <li>The RSM audit kick-off?</li>
+    <li>A demo date?</li>
+    <li>No hard date &mdash; ship when ready?</li>
+  </ul>
+</div>
+
+<hr>
+
+<h2>G. Out-of-scope check</h2>
+<p>Things in the mock we are <b>not</b> planning to build in this slice &mdash; please confirm:</p>
+<ul>
+  <li>Multi-AI-agent attribution ("Beakon AI" vs "Alex AI") beyond a single <code>created_by_agent</code> string field.</li>
+  <li>Real-time collaborative editing (two users on the same JE).</li>
+  <li>AI auto-posting (every JE still ends at a human <code>Post journal entry</code> click).</li>
+  <li>Cross-entity recharge auto-mirror (intercompany legs auto-created in the counterparty entity) &mdash; this is in the Transaction Types roadmap, not this redesign.</li>
+</ul>
+<p>If any of these <em>should</em> be in scope, please flag.</p>
+
+<hr>
+
+<h2>How to respond</h2>
+<p>Mark up this doc inline, send a voice note answering by section letter (A.1, A.2&hellip;), or just write the section letters with one-line answers. Whatever's fastest.</p>
+<p>Once we have A through F locked, I'll send back:</p>
+<ul>
+  <li>Data-model diff (new tables, new columns)</li>
+  <li>API surface</li>
+  <li>Slice 1 PR plan with rough dates</li>
+</ul>
+
+</body>
+</html>

@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { FileText, Search, Sparkles, X, Plus, Paperclip } from "lucide-react";
+import { ArrowLeft, FileText, Search, Sparkles, X, Plus, Paperclip } from "lucide-react";
 import { api, API_BASE } from "@/lib/api";
 import { fmt2, fmtDate, fmtLabel } from "@/lib/format";
 import TransactionTypePicker, { type TxType } from "@/components/transaction-type-picker";
 import {
   GeneralJEDrawer, PortfolioTradeDrawer, LoanTxnDrawer, FixedAssetDrawer,
+  BankTxnDrawer, IntercompanyDrawer, PayrollDrawer,
+  AccrualPrepaymentDrawer, PeriodEndDrawer,
 } from "@/components/transaction-drawers";
 
 
@@ -58,6 +60,17 @@ interface JESummary {
 
 
 export default function JournalEntriesPage() {
+  // useSearchParams() forces this component into client-side bailout
+  // during static export. Wrap inner content in <Suspense> so the build
+  // can emit a placeholder.
+  return (
+    <Suspense fallback={<p className="text-sm text-gray-400 py-8 text-center">Loading…</p>}>
+      <JournalEntriesPageContent />
+    </Suspense>
+  );
+}
+
+function JournalEntriesPageContent() {
   const router = useRouter();
   const search = useSearchParams();
   const [entries, setEntries] = useState<JESummary[]>([]);
@@ -99,6 +112,12 @@ export default function JournalEntriesPage() {
 
   return (
     <div>
+      <Link
+        href="/dashboard/accounting"
+        className="inline-flex items-center text-xs text-gray-500 hover:text-gray-800 mb-3"
+      >
+        <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back to Accounting
+      </Link>
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-lg font-semibold text-gray-900">Journal Entries</h1>
@@ -142,6 +161,26 @@ export default function JournalEntriesPage() {
       />
       <FixedAssetDrawer
         open={openDrawer === "fixed_asset"}
+        onClose={() => setOpenDrawer(null)}
+      />
+      <BankTxnDrawer
+        open={openDrawer === "bank"}
+        onClose={() => setOpenDrawer(null)}
+      />
+      <IntercompanyDrawer
+        open={openDrawer === "intercompany"}
+        onClose={() => setOpenDrawer(null)}
+      />
+      <PayrollDrawer
+        open={openDrawer === "payroll"}
+        onClose={() => setOpenDrawer(null)}
+      />
+      <AccrualPrepaymentDrawer
+        open={openDrawer === "accrual_prepayment"}
+        onClose={() => setOpenDrawer(null)}
+      />
+      <PeriodEndDrawer
+        open={openDrawer === "period_end"}
         onClose={() => setOpenDrawer(null)}
       />
 

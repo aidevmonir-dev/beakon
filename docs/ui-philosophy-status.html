@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>getBeakon — UI Philosophy Phase 1 — Build status</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Allura&family=Outfit:wght@400;500;600;700;800&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy: #234f60;
+    --navy-700: #1c4150;
+    --navy-50: #eaf1f4;
+    --mint: #3aa888;
+    --mint-50: #ebf6f1;
+    --mint-700: #2b8569;
+    --canvas-50: #f8fafc;
+    --canvas-100: #f1f5f9;
+    --canvas-200: #e2e8f0;
+    --canvas-300: #cbd5e1;
+    --gray-400: #94a3b8;
+    --gray-500: #64748b;
+    --gray-600: #475569;
+    --gray-700: #334155;
+    --gray-900: #0f172a;
+    --amber-50: #fffbeb;
+    --amber-200: #fde68a;
+    --amber-800: #92400e;
+    --rose-50: #fff1f2;
+    --rose-200: #fecdd3;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--canvas-50); color: var(--gray-900);
+    font-family: 'DM Sans', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  .page { max-width: 920px; margin: 0 auto; padding: 32px 24px 64px; }
+
+  /* Header card */
+  .hero {
+    position: relative;
+    background: linear-gradient(180deg, var(--navy) 0%, var(--navy-700) 100%);
+    color: #fff;
+    border-radius: 24px;
+    padding: 36px 40px;
+    overflow: hidden;
+    box-shadow: 0 20px 50px -25px rgba(15, 23, 42, 0.45);
+  }
+  .hero::after {
+    content: "";
+    position: absolute; top: -60px; right: -60px;
+    width: 220px; height: 220px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(58,168,136,0.4) 0%, rgba(58,168,136,0) 70%);
+  }
+  .hero-brand { display: flex; align-items: center; gap: 14px; }
+  .hero-mark { width: 36px; height: 36px; }
+  .hero-wordmark { height: 26px; }
+  .hero-eyebrow { margin-top: 22px; display: inline-flex; align-items: center; gap: 8px;
+    font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 600;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    background: rgba(255,255,255,0.12); padding: 6px 12px; border-radius: 999px; }
+  .hero-eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); }
+  h1 { font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 30px; line-height: 1.15;
+    margin: 12px 0 8px; letter-spacing: -0.01em; }
+  .hero-sub { font-size: 15px; opacity: 0.85; max-width: 640px; line-height: 1.55; }
+  .hero-meta { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .stat {
+    display: inline-flex; align-items: baseline; gap: 6px;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16);
+    padding: 8px 14px; border-radius: 12px;
+    font-family: 'Outfit', sans-serif; font-size: 12.5px;
+  }
+  .stat strong { font-size: 15px; font-weight: 700; }
+
+  /* Sections */
+  section { margin-top: 40px; }
+  h2 { font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 20px;
+    letter-spacing: -0.005em; margin: 0 0 4px; color: var(--gray-900); }
+  .section-eyebrow { font-family: 'Outfit', sans-serif; font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.16em; text-transform: uppercase; color: var(--mint-700); margin-bottom: 6px; }
+  .section-sub { color: var(--gray-600); font-size: 14px; line-height: 1.55;
+    max-width: 640px; margin: 0 0 18px; }
+
+  /* Item cards */
+  .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 720px) { .grid { grid-template-columns: 1fr 1fr; } }
+  .item {
+    background: #fff;
+    border: 1px solid var(--canvas-200);
+    border-radius: 16px;
+    padding: 18px 20px;
+    box-shadow: 0 2px 6px rgba(15,23,42,0.03);
+  }
+  .item-head { display: flex; align-items: center; gap: 10px; }
+  .item-num {
+    flex: 0 0 28px; width: 28px; height: 28px; border-radius: 8px;
+    background: var(--navy-50); color: var(--navy-700);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 12px;
+  }
+  .item-title { font-family: 'Outfit', sans-serif; font-weight: 600;
+    font-size: 14.5px; color: var(--gray-900); flex: 1; }
+  .check {
+    flex: 0 0 22px; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--mint); color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700;
+  }
+  .pending {
+    flex: 0 0 22px; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--amber-50); color: var(--amber-800);
+    border: 1px solid var(--amber-200);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+  }
+  .item-body { color: var(--gray-600); font-size: 13px; line-height: 1.55;
+    margin-top: 10px; }
+  .item-meta { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 5px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: var(--canvas-100); color: var(--gray-700);
+    font-family: 'Outfit', sans-serif; font-size: 10.5px; font-weight: 500;
+    padding: 3px 8px; border-radius: 999px;
+  }
+  .pill.route { font-family: ui-monospace, "Cascadia Mono", "Source Code Pro", monospace;
+    background: #f5f9fc; color: var(--navy-700); }
+  .pill.mint { background: var(--mint-50); color: var(--mint-700); }
+
+  /* Deferred / scope notes */
+  .note {
+    background: #fff;
+    border: 1px solid var(--canvas-200);
+    border-radius: 16px;
+    padding: 22px 24px;
+  }
+  .note + .note { margin-top: 12px; }
+  .note h3 { font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 15px;
+    margin: 0 0 6px; color: var(--gray-900); display: flex; align-items: center; gap: 8px; }
+  .note h3 .badge {
+    font-family: 'Outfit', sans-serif; font-size: 10px; font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 6px;
+  }
+  .badge.amber { background: var(--amber-50); color: var(--amber-800);
+    border: 1px solid var(--amber-200); }
+  .badge.rose { background: var(--rose-50); color: #9f1239;
+    border: 1px solid var(--rose-200); }
+  .note p { color: var(--gray-600); font-size: 13.5px; line-height: 1.6; margin: 6px 0 0; }
+  .note ul { color: var(--gray-600); font-size: 13.5px; line-height: 1.65;
+    margin: 8px 0 0; padding-left: 20px; }
+  .note li { margin: 4px 0; }
+  .note strong { color: var(--gray-900); }
+
+  /* Walkthrough */
+  ol.walkthrough { padding-left: 22px; color: var(--gray-700); font-size: 14px; line-height: 1.7; }
+  ol.walkthrough li { margin: 6px 0; }
+  ol.walkthrough code, .note code, .item-body code {
+    background: var(--canvas-100); padding: 1px 6px; border-radius: 4px;
+    font-family: ui-monospace, "Cascadia Mono", "Source Code Pro", monospace; font-size: 12.5px;
+    color: var(--navy-700);
+  }
+
+  footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--canvas-200);
+    text-align: center; color: var(--gray-500); font-size: 12px; }
+  footer .tag { font-family: 'Outfit', sans-serif; font-weight: 500;
+    letter-spacing: 0.18em; text-transform: uppercase; font-size: 10.5px;
+    color: var(--mint-700); }
+
+  /* Print */
+  @media print {
+    body { background: #fff; }
+    .hero { box-shadow: none; }
+    .item { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ─────────── Hero ─────────── -->
+  <div class="hero">
+    <div class="hero-brand">
+      <svg class="hero-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Beakon">
+        <defs>
+          <clipPath id="hero-clip"><rect x="0" y="0" width="48" height="48" rx="11"/></clipPath>
+        </defs>
+        <g clip-path="url(#hero-clip)">
+          <rect x="0" y="0" width="48" height="48" rx="11" fill="#ffffff"/>
+          <circle cx="44" cy="4" r="11" fill="#3aa888"/>
+        </g>
+        <text x="24" y="36" text-anchor="middle"
+              font-family="'Outfit',sans-serif"
+              font-size="34" font-weight="800" fill="#234f60">B</text>
+      </svg>
+      <svg class="hero-wordmark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 175 48">
+        <text x="0" y="34"
+              font-family="'Allura',cursive"
+              font-size="38" font-weight="400" font-style="italic" fill="#ffffff">get</text>
+        <text x="46" y="34"
+              font-family="'Outfit',sans-serif"
+              font-size="29" font-weight="800" letter-spacing="1.6" fill="#ffffff">BEAKON</text>
+      </svg>
+    </div>
+
+    <div class="hero-eyebrow"><span class="dot"></span> UI Philosophy · Phase 1 build status</div>
+    <h1>Phase 1 of your UI philosophy is live.</h1>
+    <div class="hero-sub">
+      Hi Thomas — every Phase 1 item from the 2026-05-10 working paper is in the
+      build except the sidebar, which is on hold for your suggestion.
+      Below is a quick tour you can step through, plus an honest list of the
+      bits that capture intent today and grow into full implementations next.
+    </div>
+
+    <div class="hero-meta">
+      <span class="stat"><strong>11&nbsp;/&nbsp;12</strong> items shipped</span>
+      <span class="stat"><strong>3</strong> new modules — Travel · Employment · Documents</span>
+      <span class="stat"><strong>1</strong> deferred — sidebar restructure</span>
+    </div>
+  </div>
+
+  <!-- ─────────── Onboarding & navigation ─────────── -->
+  <section>
+    <div class="section-eyebrow">Onboarding &amp; navigation</div>
+    <h2>The doorway and the operational launcher</h2>
+    <p class="section-sub">
+      The whole Stage 0 → 4 onboarding from the working paper is built, the
+      home screen is now an operational workspace launcher (not a dashboard),
+      and the workflow-context Back navigation principle is real and reusable.
+    </p>
+
+    <div class="grid">
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">0</span>
+          <span class="item-title">Entry screen</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          Three CTAs only — Create Workspace / Join Existing / Login —
+          on a calm premium landing. Matches your "minimal entry door" framing.
+        </div>
+        <div class="item-meta"><span class="pill route">/</span></div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">1</span>
+          <span class="item-title">Welcome screen</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          The exact wording from the doc — "The intelligent operating system
+          for structures, accounting, and organizational management."
+        </div>
+        <div class="item-meta"><span class="pill route">/setup · stage 1</span></div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">2</span>
+          <span class="item-title">AI / Infrastructure Approval</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          Framed explicitly as <em>platform consent</em>, not compliance.
+          AWS + Bedrock + Claude + document analysis listed transparently.
+          Compliance only activates progressively when regulated activities
+          turn on.
+        </div>
+        <div class="item-meta"><span class="pill route">/setup · stage 2</span></div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">3</span>
+          <span class="item-title">Organization Preferences &amp; Beakon Currency</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          Org name, country and Beakon Currency with the verbatim doc
+          explainer. Distinguished cleanly from entity functional currency
+          and statutory consolidation currency.
+        </div>
+        <div class="item-meta">
+          <span class="pill route">/setup · stage 3</span>
+          <span class="pill route">/dashboard/settings/organization</span>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">4</span>
+          <span class="item-title">Activity Selection</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          Six activity cards (Structure, Accounting, Travel, Employment,
+          Wealth Oversight, Documents). Drives which modules render on the
+          home screen — turn on / off any time from Settings.
+        </div>
+        <div class="item-meta"><span class="pill route">/setup · stage 4</span><span class="pill route">/dashboard/settings/activities</span></div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">5</span>
+          <span class="item-title">Home screen as operational launcher</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          Replaced the metrics dashboard with the 8-tile launcher in your
+          stated order. Tiles filter by the client's selected activities;
+          the old customizable widget dashboard moved behind the
+          "Dashboard" tile so nothing was lost.
+        </div>
+        <div class="item-meta">
+          <span class="pill route">/dashboard</span>
+          <span class="pill route">/dashboard/overview</span>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">6</span>
+          <span class="item-title">Workflow-context Back navigation</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          Your exact example works: open an Employment record from a
+          Document → click Back → returns to Documents, not Employment.
+          A small reusable component carries the workflow origin via
+          a guarded URL parameter.
+        </div>
+        <div class="item-meta"><span class="pill mint">applies across all modules</span></div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">7</span>
+          <span class="item-title">Visual entity tree builder</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          The "signature UI element" you called out. Add an entity on the
+          left (Top-level / Subsidiary / Owned by individual); the tree on
+          the right rebuilds in real time — the Thomas → Holding → Subsidiary
+          example reads at a glance.
+        </div>
+        <div class="item-meta"><span class="pill route">/dashboard/structure</span></div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">8</span>
+          <span class="item-title">Accounting Setup — chart template picker</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          Per-entity. Swiss SME / Lux SOPARFI / UK Standard / UAE Standard
+          / Phase 1 Universal, plus fiscal year and a VAT toggle. Honest
+          badges separate "loadable now" from "selection saved, package
+          shipping soon" — see the scope flag below.
+        </div>
+        <div class="item-meta"><span class="pill route">/dashboard/accounting-setup</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── Phase 1 modules ─────────── -->
+  <section>
+    <div class="section-eyebrow">Phase 1 modules</div>
+    <h2>Three new modules, "data lives once" wired through</h2>
+    <p class="section-sub">
+      Travel, Employment and Documents each ship with create / list /
+      detail flows, talking to each other through proper FKs — not duplicate
+      tables. Per your data-architecture rule.
+    </p>
+
+    <div class="grid">
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">9</span>
+          <span class="item-title">Travel Expense Management</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          Full operational workflow: trip header → receipts (multi-currency
+          with FX) → submit → <strong>different user</strong> approves or
+          rejects with reason → reimburse. Categories cover transport,
+          accommodation, meals, per diem, conference and more.
+        </div>
+        <div class="item-meta"><span class="pill route">/dashboard/travel</span></div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">10</span>
+          <span class="item-title">Employment</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          The canonical roster — name, title, employment type, employer
+          entity, manager hierarchy, optional Beakon login link. New trip
+          claims auto-link to the creator's Employee row when one exists.
+          One employee record, many references.
+        </div>
+        <div class="item-meta"><span class="pill route">/dashboard/employment</span></div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">11</span>
+          <span class="item-title">Documents</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          Horizontal document store — contracts, statements, policies,
+          certificates. Real file uploads with SHA-256 + size, or
+          external URL when the canonical copy lives elsewhere. Optional
+          links to an Entity or Employee so docs surface in context.
+        </div>
+        <div class="item-meta"><span class="pill route">/dashboard/documents</span></div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="item-num">+</span>
+          <span class="item-title">Activity toggle (post-onboarding)</span>
+          <span class="check">✓</span>
+        </div>
+        <div class="item-body">
+          The onboarding flow promised "you can turn more on at any time"
+          — this page is what makes that true. Toggle modules on or off;
+          home tiles update on next visit.
+        </div>
+        <div class="item-meta"><span class="pill route">/dashboard/settings/activities</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── Deferred / awaiting input ─────────── -->
+  <section>
+    <div class="section-eyebrow">Awaiting your input</div>
+    <h2>The one item I've held back</h2>
+
+    <div class="note">
+      <h3>Sidebar restructure <span class="badge amber">deferred</span></h3>
+      <p>
+        Your message asked for a screenshot of the current sidebar before
+        you'd send your suggestion. I built a shareable HTML mock at
+        <code>docs/sidebar-snapshot.html</code> showing the seven current
+        groups (Daily / Money / People / Accounting / Settings /
+        Reference / Developer) with every item visible.
+      </p>
+      <p>
+        I have <strong>not</strong> restructured the sidebar unilaterally —
+        the rail today is exactly as it was when I sent you the snapshot.
+        Whenever your suggestion lands, I'll fold it in.
+      </p>
+    </div>
+  </section>
+
+  <!-- ─────────── Honest scope flags ─────────── -->
+  <section>
+    <div class="section-eyebrow">Honest scope flags</div>
+    <h2>Where intent is captured but the engine still grows</h2>
+    <p class="section-sub">
+      A few places where the UI ships v1 honestly — surface and data
+      shape are right, the deeper machinery layers in next. Keeps to
+      your "accounting correctness over technical convenience" rule.
+    </p>
+
+    <div class="note">
+      <h3>Jurisdictional CoA template packages <span class="badge rose">intent only</span></h3>
+      <p>
+        The picker stores the entity's chosen template (Swiss SME / Lux
+        SOPARFI / UK Standard / UAE Standard). Today only the
+        IFRS-aligned <strong>Phase 1 Universal</strong> chart actually
+        loads accounts — the four jurisdictional packages are signed in
+        as intent, with a clearly-labelled "selection saved, template
+        package shipping soon" badge. Far better than fabricating
+        per-country charts.
+      </p>
+    </div>
+
+    <div class="note">
+      <h3>Travel reimbursement posting <span class="badge rose">status flag for v1</span></h3>
+      <p>
+        Approve → Reimburse flips a status flag and timestamps the row.
+        The actual AP-side journal entry that pays the employee is a
+        separate workstream — the engine kernel intentionally stays
+        untouched in this commit.
+      </p>
+    </div>
+
+    <div class="note">
+      <h3>AI-assisted document classification <span class="badge rose">manual today</span></h3>
+      <p>
+        Documents have eight categories the user picks from. The hook
+        for an AI suggest-on-upload is straightforward to add (similar
+        pattern to the existing OCR draft flow); deferred so the storage
+        / linking layer is solid first.
+      </p>
+    </div>
+
+    <div class="note">
+      <h3>Travel receipts as URLs <span class="badge rose">pending unification</span></h3>
+      <p>
+        Trip expense lines store a receipt URL today. Later step: swap
+        for a foreign key to the Documents store so receipts dedupe and
+        attach files directly. Same data shape on the surface — cleaner
+        plumbing underneath.
+      </p>
+    </div>
+  </section>
+
+  <!-- ─────────── Walkthrough ─────────── -->
+  <section>
+    <div class="section-eyebrow">Suggested walkthrough</div>
+    <h2>A 3-minute click-through</h2>
+
+    <ol class="walkthrough">
+      <li>Open <code>/</code> — the new entry screen (the root URL).</li>
+      <li>Walk a fresh signup: Welcome → Infrastructure consent →
+          Organization Preferences (note the <strong>Beakon Currency</strong>
+          field with the verbatim explainer) → Activity Selection.</li>
+      <li>Land on <code>/dashboard</code> — the 8-tile launcher,
+          gated by your activity choices. Top-right: the
+          <em>Beakon Currency: CHF</em> chip.</li>
+      <li>Open the <strong>Structure</strong> tile: try Thomas →
+          Allina Holding → Allina Services Ltd. The tree paints
+          live.</li>
+      <li>Open the <strong>Accounting</strong> tile flow via Settings →
+          Accounting Setup. Pick Swiss SME for one entity to see the
+          honest "shipping soon" badge.</li>
+      <li>Open the <strong>Travel Expense</strong> tile: new trip claim,
+          add two receipts (try EUR + CHF to see the FX path), submit,
+          have a colleague approve.</li>
+      <li>Add an employee in <strong>Employment</strong>; submit a new
+          trip claim from that user — the claim auto-links the
+          Employee record. The employee detail page lists their
+          claims.</li>
+      <li>Upload a contract under <strong>Documents</strong> linked to
+          an entity — open it, click the entity link, click Back,
+          notice it returns to Documents (workflow context).</li>
+      <li>Visit <strong>Settings → Activities</strong>, turn one off,
+          go home — the tile is gone, the data is preserved.</li>
+    </ol>
+  </section>
+
+  <footer>
+    <div class="tag">getBeakon · UI philosophy · Phase 1</div>
+    <p>Hosted in Switzerland · Swiss-VAT &amp; ELM-ready · AI proposes, your team approves.</p>
+  </footer>
+
+</div>
+</body>
+</html>

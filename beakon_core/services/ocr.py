@@ -709,13 +709,38 @@ def _normalise(data: dict) -> dict:
         "currency": (data.get("currency") or "").upper().strip()[:3] or None,
         "description": (data.get("description") or "").strip()[:500],
         "line_items": [],
+        # B7 — vendor's own subscriber/account number printed on the
+        # invoice, and a proactive rule draft the AI thinks would help
+        # next time. Empty string when the AI had nothing to suggest.
+        "customer_number": (data.get("customer_number") or "").strip()[:64],
+        "suggested_rule_text": (data.get("suggested_rule_text") or "").strip()[:1000],
         "suggested_account_id": _to_int(data.get("suggested_account_id")),
+        # B8 — ranked candidates for low-confidence cases. Each entry is
+        # {id, score, reason}; server-side we filter against this
+        # entity's CoA before forwarding to the frontend.
+        "account_candidates": [
+            {
+                "id": _to_int(c.get("id")),
+                "score": _to_float(c.get("score"), default=0.0),
+                "reason": (c.get("reason") or "").strip()[:160],
+            }
+            for c in (data.get("account_candidates") or [])
+            if isinstance(c, dict) and c.get("id")
+        ][:5],
         "suggested_account_reasoning": (data.get("suggested_account_reasoning") or "")[:500],
         "accounting_standard_reasoning": _normalise_standard_reasoning(
             data.get("accounting_standard_reasoning"),
         ),
         "confidence": _to_float(data.get("confidence"), default=DEFAULT_CONFIDENCE),
         "confidence_in_account": _to_float(data.get("confidence_in_account"), default=DEFAULT_CONFIDENCE),
+        # B5 — IDs of any active LearningRules the AI followed while
+        # extracting this invoice. Empty when no rules applied (or no
+        # rules existed). The frontend renders "Beakon followed Rule #N"
+        # chips so the reviewer knows what shaped the output.
+        "applied_rule_ids": [
+            int(x) for x in (data.get("applied_rule_ids") or [])
+            if isinstance(x, (int, str)) and str(x).lstrip("-").isdigit()
+        ],
         "model_used": data.get("model_used"),
         "mode": data.get("mode"),
     }
@@ -725,6 +750,11 @@ def _normalise(data: dict) -> dict:
         out["line_items"].append({
             "description": (li.get("description") or "")[:500],
             "amount": _to_decimal(li.get("amount")),
+            # B7 — absorbed = "this row is informational, the amount is
+            # already in another row above". Frontend shows these with
+            # strikethrough and excludes them from the JE.
+            "is_absorbed": bool(li.get("is_absorbed", False)),
+            "absorbed_note": (li.get("absorbed_note") or "").strip()[:200],
         })
     return out
 

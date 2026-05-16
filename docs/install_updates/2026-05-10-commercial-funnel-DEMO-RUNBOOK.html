@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Beakon — 2026 05 10 Commercial Funnel Demo Runbook</title>
+<style>
+        :root { color-scheme: light; }
+        * { box-sizing: border-box; }
+        body { font: 13px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+               color: #1f2937; background: #fff; max-width: 1080px;
+               margin: 28px auto; padding: 0 24px; }
+        h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
+        h2 { font-size: 20px; margin: 32px 0 12px;
+             padding-bottom: 6px; border-bottom: 2px solid #0f172a;
+             color: #0f172a; }
+        h3 { font-size: 15px; margin: 22px 0 6px; color: #1d4ed8; }
+        h4 { font-size: 13px; margin: 16px 0 4px; color: #334155;
+             text-transform: uppercase; letter-spacing: 0.04em; }
+        p  { margin: 6px 0; }
+        ul { margin: 4px 0; padding-left: 22px; }
+        li { margin: 2px 0; }
+        blockquote { margin: 8px 0; padding: 8px 14px;
+                     background: #f0f9ff; border-left: 3px solid #0ea5e9;
+                     color: #0c4a6e; font-style: italic; font-size: 12.5px; }
+        code { font: 12px ui-monospace, "SF Mono", "Cascadia Code", monospace;
+               background: #f1f5f9; padding: 1px 6px; border-radius: 4px;
+               color: #0f172a; }
+        pre { background: #0f172a; color: #f8fafc; padding: 12px 16px;
+              border-radius: 6px; overflow-x: auto; font-size: 12px;
+              line-height: 1.45; }
+        pre code { background: transparent; padding: 0; color: inherit; }
+        h3 code { background: transparent; padding: 0; color: #1d4ed8;
+                  font-weight: 600; }
+        table { border-collapse: collapse; width: 100%; margin: 8px 0 18px;
+                font-size: 12.5px; }
+        th, td { border: 1px solid #e5e7eb; padding: 6px 9px; text-align: left;
+                 vertical-align: top; }
+        th { background: #f8fafc; font-weight: 600; color: #334155;
+             font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+        td code { font-size: 11.5px; }
+        hr { border: 0; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+        em { color: #6366f1; font-style: italic; }
+        strong { color: #0f172a; }
+
+        @media print {
+          body { margin: 0; padding: 12mm 14mm; max-width: none; }
+          h2 { break-before: auto; break-after: avoid; }
+          h3, h4 { break-after: avoid; }
+          table, pre, blockquote { break-inside: avoid; }
+          tr { break-inside: avoid; }
+          a { color: inherit; text-decoration: none; }
+        }
+    </style>
+</head>
+<body>
+<h1>Commercial funnel demo runbook</h1>
+<p><strong>Goal</strong>: show a prospect (or Thomas's investors / partners) the full journey from "I see your ad" to "I'm using Beakon every day" — without ever touching the back-office.</p>
+<p><strong>Time budget</strong>: 4–5 minutes live click-through. <strong>Audience</strong>: anyone who needs to see Beakon as a sellable product, not just a tool.</p>
+<hr>
+<h2>Pre-flight (do this 10 minutes before)</h2>
+<pre><code class="lang-powershell"># 1. Servers up
+python manage.py runserver 0.0.0.0:8000
+# (other terminal)
+cd frontend ; npm run dev
+
+# 2. Plans seeded (idempotent)
+python manage.py seed_plans
+
+# 3. Use a fresh browser profile / incognito so you're logged out.
+#    Open http://localhost:3000/ in that window.
+
+# 4. Pick an email + password you'll use in the demo. Suggested:
+#       email:    demo+monday@allina.ch
+#       password: BeakonDemo2026!</code></pre>
+<p>If the same email has been used before, either pick a fresh one or wipe the prior account:</p>
+<pre><code class="lang-powershell">python manage.py shell -c "from accounts.models import User; User.objects.filter(email='demo+monday@allina.ch').delete()"</code></pre>
+<hr>
+<h2>The storyline (5 minutes)</h2>
+<h3>Beat 1 — landing & pricing (45 seconds)</h3>
+<p>Open <code>http://localhost:3000/</code> in a <strong>fresh / incognito browser</strong>.</p>
+<blockquote>"This is what a prospect sees. They land on the marketing page,<br>scroll a bit, and click <strong>Pricing</strong>."</blockquote>
+<p>Click <strong>Pricing</strong> in the nav.</p>
+<blockquote>"Four tiers — Starter, Professional, Family Office, Enterprise.<br>The pricing reflects the audience: CHF 79 for a single SME, CHF 490<br>for a family office, custom for fiduciaries. Notice the CTAs differ —<br>the first three are <strong>Start 30-day trial</strong>; Enterprise is **Book a<br>call**, because at that price point we're not selling self-serve."</blockquote>
+<h3>Beat 2 — sign up (45 seconds)</h3>
+<p>Click <strong>Start 30-day trial</strong> on the <strong>Family Office</strong> card.</p>
+<blockquote>"The pricing page hands the chosen plan into the registration page.<br>Notice the badge — *Family Office plan, CHF 490 / mo* — so the user<br>knows what they're committing to."</blockquote>
+<p>Fill in name, email, password. Click <strong>Create account</strong>.</p>
+<blockquote>"No credit card. No 'enter billing now'. We don't need that — for<br>the family-office market, payment happens via invoice once the<br>contract is signed."</blockquote>
+<h3>Beat 3 — setup wizard (90 seconds)</h3>
+<p>The user lands on <code>/setup?plan=family</code>.</p>
+<blockquote>"Now a four-step wizard. Step one: workspace basics."</blockquote>
+<p>Fill in:</p>
+<ul><li>Workspace name: <code>Demo Family Office</code></li><li>Currency: CHF</li><li>Country: Switzerland</li></ul>
+<p>Click <strong>Continue</strong>.</p>
+<blockquote>"Step two: how is the business structured? This drives which modules<br>the user sees. Single company is the simplest. Multi-entity adds<br>intercompany. Custodian-fed adds the Custodian Statements module<br>we built earlier."</blockquote>
+<p>Pick <strong>Custodian-fed family office</strong>. Click <strong>Continue</strong>.</p>
+<blockquote>"Step three: would you like to explore with sample data? It's off<br>by default — a real customer's books shouldn't have fake Roche<br>shares in them. For the demo we'll turn it on."</blockquote>
+<p>Toggle <strong>Yes, seed the sample family-office dataset</strong>. Click <strong>Continue</strong>.</p>
+<blockquote>"Step four: review and start. Plan, currency, country, structure,<br>sample data toggle, and the trial terms — 30 days, no credit card,<br>activate when ready."</blockquote>
+<p>Click <strong>Start my 30-day trial</strong>.</p>
+<h3>Beat 4 — inside the product (60 seconds)</h3>
+<p>The user lands on <code>/dashboard</code>. The first thing they see is the <strong>trial banner</strong> at the top of every page:</p>
+<blockquote>*Family Office trial · 30 days left · Activate plan*</blockquote>
+<blockquote>"Persistent strip across every page. They always know what plan<br>they're on, how much trial is left, and where to upgrade. No<br>mystery, no nag-screens, no 'we'll surprise you with a bill in<br>three weeks'."</blockquote>
+<p>Walk them through the dashboard quickly — Home, Approvals, Financials. Then Custodian Statements:</p>
+<blockquote>"And because they picked custodian-fed structure, the Custodian<br>Statements module is right here under <strong>Money</strong> in the sidebar.<br>Their daily SFTP feed lands here, posts to the ledger, and<br>reconciles holdings against their books — exactly what we showed<br>earlier in the dedicated demo."</blockquote>
+<p>(Optional: click into Custodian Statements briefly so they see it's populated with sample data.)</p>
+<h3>Beat 5 — the activation moment (60 seconds)</h3>
+<p>Click <strong>Activate plan</strong> in the trial banner.</p>
+<p>A modal opens.</p>
+<blockquote>"When the user is ready to convert, one click. Not 'enter your<br>credit card and we'll auto-bill you forever'. They confirm their<br>contact, leave a note about their billing entity if they have a<br>special VAT setup, and submit."</blockquote>
+<p>Fill in:</p>
+<ul><li>Contact name: <code>Thomas</code></li><li>Contact email: <code>thomas@allina.ch</code></li><li>Notes: <code>Please invoice Allina Family Office GmbH, VAT CHE-123.456.789</code></li></ul>
+<p>Click <strong>Send activation request</strong>.</p>
+<p>The banner switches to:</p>
+<blockquote>*Activation requested — we'll be in touch.*</blockquote>
+<blockquote>"From here it's our process: I get an email, I send an invoice<br>through our normal billing flow, the customer pays, and I flip<br>the subscription to <strong>active</strong> in the back-office. The trial<br>doesn't expire while the activation is in flight."</blockquote>
+<h3>Beat 6 — the back-office side (45 seconds)</h3>
+<p>Open Django admin in a separate tab: <code>http://localhost:8000/admin/beakon_core/activationrequest/</code>.</p>
+<blockquote>"Here's what I see. Every activation request lands as a row, with<br>the org, contact, plan, and notes. I mark it <strong>Invoice sent</strong> when<br>I email the invoice, <strong>Paid</strong> when payment confirms — and Bulk<br>action 'Mark selected as active' on the subscription flips the<br>trial to active."</blockquote>
+<p>(If time, show the Plans admin too — to make the point that the catalogue is editable: change pricing, add a new tier, deactivate a tier without touching code.)</p>
+<hr>
+<h2>What this demonstrates</h2>
+<p>Four things, in order of how a prospect / partner / investor will score you:</p>
+<p>1. <strong>There's a real funnel.</strong> Pricing → register → onboarding → product is a connected path, not a Frankenstein of links. 2. <strong>The commercial model is clear.</strong> Trial period stated, no hidden credit-card friction, plan badge visible everywhere. 3. <strong>The product matches the pitch.</strong> The structure question in the wizard maps directly to which modules show up — multi-entity gets intercompany, custodian-fed gets the SFTP feed. 4. <strong>There's an operator on the other side.</strong> Activation isn't a black box — Thomas's admin view shows requests landing, subscriptions to flip, plans to edit.</p>
+<h2>What it does NOT yet demonstrate (be honest if asked)</h2>
+<ul><li><strong>Stripe / automatic billing.</strong> Activation is manual today. That's</li></ul>
+<p>a feature in this market, not a bug — but if pressed, say "we invoice through our existing billing stack; Stripe Invoices is on the roadmap when self-serve volume justifies it."</p>
+<ul><li><strong>Per-plan feature gating.</strong> A Starter org currently sees the same</li></ul>
+<p>screens as a Family Office org. That's a deliberate v1 scope — we don't yet have a list of which features each plan locks. Coming after the founder team agrees on what's in each plan.</p>
+<ul><li><strong>Trial expiry handling.</strong> The model has the date, the banner</li></ul>
+<p>counts down, but nothing currently *enforces* the expiry. The next build adds "trial expired — read-only mode" + auto-email.</p>
+<h2>If something goes wrong on stage</h2>
+<table>
+  <thead><tr><th>Symptom</th><th>Recovery</th></tr></thead>
+  <tbody>
+    <tr><td>Pricing CTAs go nowhere</td><td><code>python manage.py seed_plans</code> — Plan rows missing.</td></tr>
+    <tr><td>Setup wizard 500s on "Start trial"</td><td>Subscription start endpoint failed. The wizard logs it as a warning and continues; the user still lands in dashboard. The trial banner won't show but everything else works.</td></tr>
+    <tr><td>Trial banner doesn't appear</td><td>The org has no subscription. <code>OrganizationSubscription.objects.create(...)</code> from the shell, or just re-run the wizard with a fresh user.</td></tr>
+    <tr><td>Email already exists</td><td>Wipe with the shell command in pre-flight or pick a different demo email.</td></tr>
+    <tr><td>Activate modal 401s</td><td>The user isn't authenticated — log in via <code>/login</code>.</td></tr>
+  </tbody></table>
+<h2>What NOT to claim</h2>
+<ul><li><strong>"It charges credit cards."</strong> It doesn't, and you don't want it</li></ul>
+<p>to (yet). Say "invoice-based activation".</p>
+<ul><li><strong>"All plans are unlocked."</strong> They are today, but say "the system</li></ul>
+<p>is wired for plan-based gating; we're rolling out feature differences as we go". Honest.</p>
+<ul><li><strong>"30 days is the standard trial."</strong> It's the standard *Beakon*</li></ul>
+<p>trial. Family-office customers will probably negotiate longer for their first contract; the model supports custom trial durations.</p>
+</body>
+</html>

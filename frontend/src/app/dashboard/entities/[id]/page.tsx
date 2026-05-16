@@ -7,7 +7,7 @@
  * existing overview, investments tab, edit drawer, and delete/deactivate
  * flow intact — only the surrounding chrome has been calmed down.
  */
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -117,6 +117,17 @@ function slugify(v: string) {
 
 
 export default function EntityDetailPage() {
+  // useSearchParams() forces this component into client-side bailout
+  // during static export. Wrap inner content in <Suspense> so the build
+  // can emit a placeholder.
+  return (
+    <Suspense fallback={<p className="text-sm text-gray-400 py-8 text-center">Loading…</p>}>
+      <EntityDetailPageContent />
+    </Suspense>
+  );
+}
+
+function EntityDetailPageContent() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const router = useRouter();

@@ -10,6 +10,7 @@ from django.contrib import admin
 from .models import (
     Account,
     AccountGroup,
+    ActivationRequest,
     ApprovalAction,
     BankAccountMaster,
     CoAMapping,
@@ -28,6 +29,8 @@ from .models import (
     JournalEntry,
     JournalLine,
     Loan,
+    OrganizationSubscription,
+    Plan,
     Pension,
     Period,
     Policy,
@@ -809,3 +812,43 @@ class TaxCodeAdmin(admin.ModelAdmin):
     search_fields = ("code", "name", "country_code", "notes")
     raw_id_fields = ("output_account", "input_account")
     readonly_fields = ("created_at", "updated_at")
+
+
+# ── Commercial layer (plans / subscriptions / activation requests) ──
+
+
+@admin.register(Plan)
+class PlanAdmin(admin.ModelAdmin):
+    list_display = ("sort_order", "name", "slug", "price", "currency",
+                    "billing_cadence", "max_entities",
+                    "is_self_serve", "is_active")
+    list_filter = ("is_active", "is_self_serve", "billing_cadence")
+    search_fields = ("name", "slug", "audience")
+
+
+@admin.register(OrganizationSubscription)
+class OrganizationSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ("organization", "plan", "status",
+                    "started_at", "trial_ends_at", "activated_at")
+    list_filter = ("status", "plan")
+    raw_id_fields = ("organization", "plan")
+    readonly_fields = ("started_at", "created_at", "updated_at")
+    actions = ["activate_selected"]
+
+    @admin.action(description="Mark selected as active (after invoice paid)")
+    def activate_selected(self, request, queryset):
+        for sub in queryset:
+            if sub.status != OrganizationSubscription.STATUS_ACTIVE:
+                sub.activate(notes=f"Activated from admin by {request.user}.")
+        self.message_user(request, f"Activated {queryset.count()} subscription(s).")
+
+
+@admin.register(ActivationRequest)
+class ActivationRequestAdmin(admin.ModelAdmin):
+    list_display = ("requested_at", "subscription", "contact_name",
+                    "contact_email", "status", "invoice_ref", "handled_at")
+    list_filter = ("status",)
+    search_fields = ("contact_name", "contact_email", "invoice_ref",
+                     "subscription__organization__name")
+    raw_id_fields = ("subscription", "requested_by", "handled_by")
+    readonly_fields = ("requested_at",)

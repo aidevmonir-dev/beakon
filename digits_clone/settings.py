@@ -212,6 +212,17 @@ AVALOQ_INCOMING_DIR = Path(_cfg(
     "AVALOQ_INCOMING_DIR",
     default=str(BASE_DIR / "incoming" / "avaloq"),
 ))
+# After successful ingest a zip is moved into AVALOQ_ARCHIVE_DIR/<business_date>/.
+# On parse failure it goes to AVALOQ_QUARANTINE_DIR. Operators inspect quarantine
+# manually; archived zips are the audit trail (retain ≥ 30 days per the spec).
+AVALOQ_ARCHIVE_DIR = Path(_cfg(
+    "AVALOQ_ARCHIVE_DIR",
+    default=str(BASE_DIR / "incoming" / "avaloq_archive"),
+))
+AVALOQ_QUARANTINE_DIR = Path(_cfg(
+    "AVALOQ_QUARANTINE_DIR",
+    default=str(BASE_DIR / "incoming" / "avaloq_quarantine"),
+))
 
 # ---------------------------------------------------------------------------
 # Django REST Framework

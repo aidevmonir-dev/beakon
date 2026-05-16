@@ -29,9 +29,9 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fetchCurrentUser } from "@/lib/api";
+import { fetchCurrentUser, type CurrentUser, type UserOrganization } from "@/lib/api";
 import Logo from "@/components/logo";
 import { NAV_SECTIONS, type NavItem, type NavSection } from "@/components/sidebar-nav";
 
@@ -45,6 +45,7 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
   const pathname = usePathname();
   const [hovered, setHovered] = useState(false);
   const [isDeveloper, setIsDeveloper] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
   // Per-section collapsed state. Seeded from each section's
   // `defaultCollapsed`. Keyed by section index since labels can repeat
@@ -57,13 +58,16 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
     return init;
   });
 
-  // Detect developer (staff) once on mount. Failure is silent — the
-  // Developer section just stays hidden, which is the safe default.
+  // Detect developer (staff) + load the current user once on mount.
+  // Failure is silent — Developer section stays hidden and the user
+  // chip falls back to a generic avatar.
   useEffect(() => {
     let cancelled = false;
     fetchCurrentUser()
       .then((u) => {
-        if (!cancelled) setIsDeveloper(Boolean(u?.is_staff || u?.is_superuser));
+        if (cancelled) return;
+        setIsDeveloper(Boolean(u?.is_staff || u?.is_superuser));
+        setCurrentUser(u ?? null);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -80,7 +84,8 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
         const hasActive = s.items.some(
           (it) =>
             pathname === it.href ||
-            (it.href !== "/dashboard" && pathname.startsWith(it.href)),
+            (it.href !== "/dashboard" && pathname.startsWith(it.href)) ||
+            (it.matches ?? []).some((p) => pathname.startsWith(p)),
         );
         if (hasActive) next[i] = false;
       });
@@ -96,6 +101,13 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
     () => NAV_SECTIONS.filter((s) => !s.developerOnly || isDeveloper),
     [isDeveloper],
   );
+
+  // Sections with `pinBottom` flow to the bottom of the rail (above the
+  // brand row's flex spacer). Help / Beakon Tour and the Developer group
+  // both pin so they don't compete with the module list for first-screen
+  // real estate.
+  const topSections = visibleSections.filter((s) => !s.pinBottom);
+  const bottomSections = visibleSections.filter((s) => s.pinBottom);
 
   return (
     <>
@@ -144,20 +156,37 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
           </div>
         </div>
 
-        {/* Grouped nav */}
+        {/* Grouped nav — top sections flow naturally, bottom sections
+            are pushed to the foot of the rail by `mt-auto`. */}
         <nav
-          className="flex-1 overflow-y-auto overflow-x-hidden py-3 pb-8"
+          className="flex-1 flex flex-col overflow-y-auto overflow-x-hidden py-3 pb-4"
           aria-label="Main navigation"
         >
-          {visibleSections.map((section) => {
-            // Use the original index from NAV_SECTIONS so collapsed[]
-            // stays stable when developer-only sections appear/hide.
+          {topSections.map((section, ti) => {
             const idx = NAV_SECTIONS.indexOf(section);
             return (
               <NavSectionBlock
                 key={idx}
                 section={section}
-                isFirst={idx === 0}
+                isFirst={ti === 0}
+                expanded={expanded}
+                collapsed={Boolean(collapsed[idx])}
+                onToggle={() =>
+                  setCollapsed((prev) => ({ ...prev, [idx]: !prev[idx] }))
+                }
+                pathname={pathname}
+                onNavigate={onMobileClose}
+              />
+            );
+          })}
+          {bottomSections.length > 0 && <div className="mt-auto" aria-hidden />}
+          {bottomSections.map((section, bi) => {
+            const idx = NAV_SECTIONS.indexOf(section);
+            return (
+              <NavSectionBlock
+                key={idx}
+                section={section}
+                isFirst={bi === 0}
                 expanded={expanded}
                 collapsed={Boolean(collapsed[idx])}
                 onToggle={() =>
@@ -169,6 +198,12 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
             );
           })}
         </nav>
+
+        {/* User-profile chip pinned to the very bottom of the rail.
+            Collapsed rail shows just the initials avatar; expanded
+            sidebar reveals full name + role · org. Matches Thomas's
+            2026-05-11 sidebar mockup. */}
+        <UserChip user={currentUser} expanded={expanded} />
       </aside>
     </>
   );
@@ -251,6 +286,99 @@ function NavSectionBlock({
 }
 
 
+function UserChip({
+  user, expanded,
+}: { user: CurrentUser | null; expanded: boolean }) {
+  // Pick the org matching localStorage so the chip reflects the
+  // current workspace, not the user's first org. Falls back to first.
+  const activeOrg: UserOrganization | null = useMemo(() => {
+    if (!user?.organizations || user.organizations.length === 0) return null;
+    const orgId = typeof window !== "undefined"
+      ? localStorage.getItem("organization_id") : null;
+    if (orgId) {
+      const match = user.organizations.find((o) => String(o.id) === orgId);
+      if (match) return match;
+    }
+    return user.organizations[0];
+  }, [user]);
+
+  const fullName = user
+    ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim()
+      || user.email?.split("@")[0]
+      || "Member"
+    : "";
+  const initials = initialsFor(user);
+  const roleLabel = activeOrg?.role ? prettifyRole(activeOrg.role) : "";
+  const orgLabel = activeOrg?.name || "";
+
+  return (
+    <Link
+      href="/dashboard/settings"
+      className={cn(
+        "flex items-center gap-3 border-t border-canvas-100 px-3 py-3",
+        "hover:bg-canvas-50/60 transition-colors",
+      )}
+      title={fullName ? `${fullName} — ${orgLabel}` : "Account"}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+          "bg-brand-100 text-brand-700 text-[11px] font-semibold tracking-wide",
+        )}
+      >
+        {initials}
+      </span>
+      <div
+        className={cn(
+          "min-w-0 flex-1 transition-opacity duration-150",
+          expanded ? "opacity-100" : "opacity-0 pointer-events-none",
+        )}
+        aria-hidden={!expanded}
+      >
+        <div className="text-[12.5px] font-semibold text-gray-900 truncate leading-tight">
+          {fullName || "Loading…"}
+        </div>
+        <div className="text-[10.5px] text-gray-500 truncate leading-tight mt-0.5">
+          {roleLabel && orgLabel
+            ? `${roleLabel} · ${orgLabel}`
+            : (roleLabel || orgLabel || "")}
+        </div>
+      </div>
+      <ChevronUp
+        className={cn(
+          "h-3.5 w-3.5 shrink-0 text-gray-400 transition-opacity duration-150",
+          expanded ? "opacity-100" : "opacity-0 pointer-events-none",
+        )}
+        aria-hidden={!expanded}
+      />
+    </Link>
+  );
+}
+
+
+function initialsFor(user: CurrentUser | null): string {
+  if (!user) return "·";
+  const first = (user.first_name || "").trim();
+  const last  = (user.last_name || "").trim();
+  if (first && last) return (first[0] + last[0]).toUpperCase();
+  if (first) return first.slice(0, 2).toUpperCase();
+  if (last)  return last.slice(0, 2).toUpperCase();
+  const local = (user.email || "").split("@")[0];
+  return (local.slice(0, 2) || "··").toUpperCase();
+}
+
+
+function prettifyRole(slug: string): string {
+  if (!slug) return "";
+  return slug
+    .split(/[._-\s]+/)
+    .filter(Boolean)
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())
+    .join(" ");
+}
+
+
 function NavRow({
   item, expanded, pathname, onNavigate,
 }: {
@@ -260,9 +388,11 @@ function NavRow({
   onNavigate?: () => void;
 }) {
   const Icon = item.icon;
+  const matchesExtra = (item.matches ?? []).some((p) => pathname.startsWith(p));
   const isActive =
     pathname === item.href ||
-    (item.href !== "/dashboard" && pathname.startsWith(item.href));
+    (item.href !== "/dashboard" && pathname.startsWith(item.href)) ||
+    matchesExtra;
 
   // Fixed 44px icon well keeps icons centered in the collapsed rail;
   // label fades in when `expanded`.
@@ -281,6 +411,27 @@ function NavRow({
     expanded ? "opacity-100" : "opacity-0",
   );
 
+  // External items (e.g. /admin/...) open in a new tab via a plain
+  // anchor so Next doesn't attempt to client-route a non-app path.
+  if (item.external) {
+    return (
+      <a
+        href={item.href}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={onNavigate}
+        title={item.description || item.name}
+        className={cn(
+          rowBase,
+          "text-slate-700 hover:bg-canvas-50 hover:text-gray-900",
+        )}
+      >
+        {iconWell("text-slate-500 group-hover:text-slate-700")}
+        <span className={labelClass}>{item.name}</span>
+      </a>
+    );
+  }
+
   return (
     <Link
       href={item.href}
@@ -288,19 +439,27 @@ function NavRow({
       title={item.description || item.name}
       className={cn(
         rowBase,
+        // Thomas §5.2: active state uses Beakon blue more clearly —
+        // soft brand background + deeper text. Inactive rows use a
+        // stronger slate so the rail stays legible.
         isActive
           ? "bg-brand-50 text-brand-900"
-          : "text-gray-600 hover:bg-canvas-50 hover:text-gray-900",
+          : "text-slate-700 hover:bg-canvas-50 hover:text-gray-900",
       )}
     >
-      {/* Active left accent */}
+      {/* Active left accent — stronger Beakon blue per Thomas §5.2. */}
       {isActive && (
         <span
           aria-hidden
-          className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-r-full bg-brand-500"
+          className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-r-full bg-brand-700"
         />
       )}
-      {iconWell(isActive ? "text-brand-700" : "text-gray-400 group-hover:text-gray-600")}
+      {iconWell(
+        // Thomas §5.2: inactive icons were too faint (gray-400);
+        // bump to slate-500 for legibility. Active icon goes deeper
+        // (brand-800) to read as confidently selected.
+        isActive ? "text-brand-800" : "text-slate-500 group-hover:text-slate-700",
+      )}
       <span className={labelClass}>{item.name}</span>
     </Link>
   );

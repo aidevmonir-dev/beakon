@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Allura, DM_Sans, Fraunces, Outfit } from "next/font/google";
+import { Allura, DM_Sans, Fraunces, JetBrains_Mono, Outfit } from "next/font/google";
 import "./globals.css";
 
 const dmSans = DM_Sans({
@@ -32,6 +32,16 @@ const outfit = Outfit({
   display: "swap",
 });
 
+// Monospace — financial figures, codes, references. JetBrains Mono has
+// genuine tabular figures (cv11) and tight tracking, so columns of
+// amounts line up cleanly without per-cell width gymnastics.
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+  weight: ["400", "500", "600"],
+});
+
 export const metadata: Metadata = {
   title: "Beakon — The AI Operating System for Fiduciary Excellence",
   description:
@@ -54,7 +64,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${dmSans.variable} ${fraunces.variable} ${allura.variable} ${outfit.variable}`}>
+    <html lang="en" className={`${dmSans.variable} ${fraunces.variable} ${allura.variable} ${outfit.variable} ${jetbrainsMono.variable}`}>
       <body suppressHydrationWarning>{children}</body>
     </html>
   );

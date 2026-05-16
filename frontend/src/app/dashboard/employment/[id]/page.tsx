@@ -22,10 +22,10 @@ import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/page-header";
 import WorkflowBack from "@/components/workflow-back";
 import type { Employee } from "../page";
-import type { TripClaim } from "../../travel/page";
+import type { TripClaim } from "../../travel/_lib";
 import {
   formatDateRange, formatMoney, StatusPill,
-} from "../../travel/page";
+} from "../../travel/_lib";
 
 
 interface Entity {

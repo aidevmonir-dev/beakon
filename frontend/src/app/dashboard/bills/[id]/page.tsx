@@ -16,9 +16,42 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Send, CheckCircle2, XCircle, RotateCcw, Ban, DollarSign, X,
+  Sparkles, Loader2,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { fmt2, fmtDate, fmtDateTime, fmtLabel } from "@/lib/format";
+import { RationaleDocsPanel, type SourceDoc } from "@/components/rationale-docs-panel";
+
+
+interface LearningRule {
+  id: number;
+  vendor_code: string | null;
+  vendor_name: string | null;
+  scope: string;
+  scope_label: string;
+  confidence_policy: string;
+  confidence_policy_label: string;
+  correction_type: string;
+  human_instruction: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+interface Correction {
+  id: number;
+  bill: number;
+  vendor: number;
+  vendor_code: string | null;
+  correction_text: string;
+  error_types: string[];
+  make_reusable_rule: boolean;
+  future_rule_instruction: string;
+  promoted_rule: LearningRule | null;
+  ai_proposal_snapshot: Record<string, unknown>;
+  created_by: number | null;
+  created_by_name: string | null;
+  created_at: string;
+}
 
 
 interface Line {
@@ -54,8 +87,11 @@ interface Bill {
   total: string;
   status: string;
   description: string;
+  explanation: string;
   notes: string;
   lines: Line[];
+  documents: SourceDoc[];
+  corrections: Correction[];
   accrual_journal_entry: number | null;
   accrual_journal_entry_number: string | null;
   payment_journal_entry: number | null;
@@ -366,6 +402,39 @@ export default function BillDetailPage() {
         </div>
       </div>
 
+      {/* Rationale + source-document cross-check.
+       * Spec: every import-transaction screen shows the human's "why this
+       * debit/credit" text alongside the original PDF/image so the reviewer
+       * can verify the extracted lines against the source.
+       * If the bill was prefilled by AI, parseAISource() reads the stable
+       * "[AI-EXTRACTED:<model>] from <filename>" prefix on bill.notes so the
+       * panel can flag the rationale as an AI proposal. */}
+      <RationaleDocsPanel
+        parentBasePath={`/beakon/bills/${bill.id}`}
+        initialExplanation={bill.explanation || ""}
+        initialDocuments={bill.documents}
+        explanationLocked={bill.status !== "draft" && bill.status !== "pending_approval"}
+        attachmentsLocked={bill.status === "approved" || bill.status === "paid"}
+        aiSource={parseAISource(bill.notes)}
+        onExplanationSaved={(next) =>
+          setBill((b) => (b ? { ...b, explanation: next } : b))
+        }
+        onDocumentsChanged={(_count) => { /* count surfaced if needed */ }}
+      />
+
+      {/* Thomas 2026-05-12: capture what the AI got wrong so Beakon can
+          learn for the next invoice from this vendor. Phase A = capture
+          history; Phase B will feed these notes back into the next OCR
+          extraction prompt automatically. */}
+      <CorrectionsPanel
+        billId={bill.id}
+        vendorName={bill.vendor_name}
+        initialCorrections={bill.corrections || []}
+        onCorrectionAdded={(next) =>
+          setBill((b) => (b ? { ...b, corrections: [next, ...(b.corrections || [])] } : b))
+        }
+      />
+
       {payOpen && (
         <PayModal
           bill={bill}
@@ -387,6 +456,364 @@ function TimelineRow({ label, at }: { label: string; at: string | null }) {
       </span>
     </li>
   );
+}
+
+
+// ── Teach Beakon panel ────────────────────────────────────────────────────
+// Thomas 2026-05-12 spec: structured correction layer (not free-text only).
+// Three inputs: (1) structured error-type checkboxes, (2) plain-English
+// explanation of the correction, (3) scope choice — one-off OR reusable
+// rule. When the user picks "remember for future invoices" a second
+// textarea collects the rule instruction that will become a LearningRule
+// in B3. Bills in any status can receive corrections — the goal is to
+// teach Beakon, not to mutate the bill itself.
+//
+// Thomas's verbatim copy is preserved everywhere — button label, panel
+// title, intro sentence, scope-radio labels — see project_teach_beakon_spec.
+
+interface ErrorType { key: string; label: string }
+
+const ERROR_TYPES: ErrorType[] = [
+  { key: "wrong_account",       label: "Wrong account" },
+  { key: "wrong_amount",        label: "Wrong amount" },
+  { key: "duplicate_line",      label: "Duplicate line" },
+  { key: "vat_treatment_wrong", label: "VAT treatment wrong" },
+  { key: "missing_allocation",  label: "Missing recharge/allocation" },
+  { key: "wrong_entity",        label: "Wrong entity" },
+  { key: "wrong_vendor",        label: "Wrong vendor" },
+  { key: "wrong_description",   label: "Wrong description" },
+  { key: "other",               label: "Other" },
+];
+
+
+function CorrectionsPanel({
+  billId, vendorName, initialCorrections, onCorrectionAdded,
+}: {
+  billId: number;
+  vendorName: string;
+  initialCorrections: Correction[];
+  onCorrectionAdded: (c: Correction) => void;
+}) {
+  const [text, setText] = useState("");
+  const [errorTypes, setErrorTypes] = useState<Set<string>>(new Set());
+  const [scope, setScope] = useState<"one_off" | "reusable">("one_off");
+  const [futureInstruction, setFutureInstruction] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  // Confirmation banner shown after a successful save. Surfaces whether a
+  // LearningRule was promoted (Thomas §6 — the user needs to see that the
+  // rule landed somewhere durable).
+  const [lastSaved, setLastSaved] = useState<Correction | null>(null);
+
+  const toggleErrorType = (key: string) => {
+    setErrorTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const reusable = scope === "reusable";
+  const canSave =
+    text.trim().length > 0 &&
+    (!reusable || futureInstruction.trim().length > 0);
+
+  const save = async () => {
+    if (!canSave) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      const created = await api.post<Correction>(
+        `/beakon/bills/${billId}/corrections/`,
+        {
+          correction_text: text.trim(),
+          error_types: Array.from(errorTypes),
+          make_reusable_rule: reusable,
+          future_rule_instruction: reusable ? futureInstruction.trim() : "",
+        },
+      );
+      onCorrectionAdded(created);
+      setLastSaved(created);
+      // Reset form
+      setText("");
+      setErrorTypes(new Set());
+      setScope("one_off");
+      setFutureInstruction("");
+    } catch (e: any) {
+      setErr(e?.error?.message || e?.message || "Could not save correction.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 card p-4 sm:p-5">
+      <div className="flex items-start gap-2 mb-3">
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-mint-50 text-mint-700 ring-1 ring-mint-100">
+          <Sparkles className="h-3.5 w-3.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold text-gray-900 leading-tight">
+            Teach Beakon
+          </h3>
+          <p className="text-[11.5px] text-gray-500 mt-0.5 leading-relaxed">
+            Tell Beakon what was wrong with this draft. Beakon will correct
+            this journal entry and, if you choose, remember the rule for
+            similar invoices in future. Vendor:{" "}
+            <span className="font-medium text-gray-700">{vendorName}</span>.
+          </p>
+        </div>
+      </div>
+
+      {err && (
+        <div className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+          {err}
+        </div>
+      )}
+
+      {lastSaved && (
+        // Confirmation tile after save. Two variants: plain "saved" for
+        // one-off corrections; richer "rule created" for reusable rules
+        // so the user can see what was stored in the registry.
+        <div className="mb-3 rounded-lg border border-mint-200 bg-mint-50 px-3 py-2.5 text-xs text-mint-800">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              {lastSaved.promoted_rule ? (
+                <>
+                  <p className="font-semibold leading-tight">
+                    Learning rule saved · {lastSaved.promoted_rule.scope_label}
+                  </p>
+                  <p className="mt-1 leading-relaxed text-mint-900">
+                    Beakon will apply this on the next bill from{" "}
+                    <span className="font-semibold">
+                      {lastSaved.promoted_rule.vendor_name || lastSaved.vendor_code}
+                    </span>
+                    . Policy: <span className="font-semibold">
+                      {lastSaved.promoted_rule.confidence_policy_label}
+                    </span>{" "}
+                    (you&apos;ll still review the first use).
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="font-semibold leading-tight">Correction saved</p>
+                  <p className="mt-1 leading-relaxed text-mint-900">
+                    Recorded for audit. No reusable rule was created.
+                  </p>
+                </>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setLastSaved(null)}
+              className="shrink-0 text-mint-700 hover:text-mint-900"
+              aria-label="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Error type ── */}
+      <fieldset className="mb-4">
+        <legend className="text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500 mb-2">
+          What was wrong?
+        </legend>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1.5">
+          {ERROR_TYPES.map((t) => (
+            <label
+              key={t.key}
+              className="inline-flex items-center gap-2 text-[12.5px] text-gray-700 cursor-pointer hover:text-gray-900"
+            >
+              <input
+                type="checkbox"
+                checked={errorTypes.has(t.key)}
+                onChange={() => toggleErrorType(t.key)}
+                disabled={saving}
+                className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span>{t.label}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      {/* ── Explanation (correction itself) ── */}
+      <div className="mb-4">
+        <label className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500 mb-1.5">
+          Explain the correction
+        </label>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder='e.g. "Mobile total 137.70 already includes the device instalment 41.90 — that line was added twice. Final payable should reconcile to invoice total 201.80."'
+          rows={3}
+          className="input w-full text-sm leading-relaxed"
+          disabled={saving}
+        />
+      </div>
+
+      {/* ── Scope ── */}
+      <fieldset className="mb-4">
+        <legend className="text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500 mb-2">
+          Scope
+        </legend>
+        <div className="space-y-2">
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input
+              type="radio"
+              name="teach-scope"
+              checked={scope === "one_off"}
+              onChange={() => setScope("one_off")}
+              disabled={saving}
+              className="mt-0.5 h-3.5 w-3.5 border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-[13px] text-gray-800 leading-tight">
+              Fix this draft only
+              <span className="block text-[11px] text-gray-500 mt-0.5">
+                Apply to this invoice only — do not change future invoices.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input
+              type="radio"
+              name="teach-scope"
+              checked={scope === "reusable"}
+              onChange={() => setScope("reusable")}
+              disabled={saving}
+              className="mt-0.5 h-3.5 w-3.5 border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-[13px] text-gray-800 leading-tight">
+              Fix this draft and remember for future invoices
+              <span className="block text-[11px] text-gray-500 mt-0.5">
+                Save a reusable rule for similar invoices from this vendor.
+              </span>
+            </span>
+          </label>
+        </div>
+      </fieldset>
+
+      {/* ── Future-rule instruction (only when reusable) ── */}
+      {reusable && (
+        <div className="mb-4">
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500 mb-1.5">
+            How should Beakon treat similar invoices in future?
+          </label>
+          <textarea
+            value={futureInstruction}
+            onChange={(e) => setFutureInstruction(e.target.value)}
+            placeholder="Example: For Sunrise invoices, do not add device instalments separately when they are already included in the Mobile total. Use the VAT declaration and ensure the JE reconciles to the invoice total."
+            rows={3}
+            className="input w-full text-sm leading-relaxed"
+            disabled={saving}
+          />
+          <p className="mt-1 text-[11px] text-gray-400 leading-snug">
+            Required when you choose to remember the rule. Beakon will apply
+            this on the next invoice from {vendorName}.
+          </p>
+        </div>
+      )}
+
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving || !canSave}
+          className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3.5 py-1.5 text-[12.5px] font-semibold text-white shadow-sm hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {saving ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Saving…
+            </>
+          ) : (
+            <>
+              <Sparkles className="h-3.5 w-3.5" />
+              Correct &amp; teach Beakon
+            </>
+          )}
+        </button>
+      </div>
+
+      {initialCorrections.length > 0 && (
+        <div className="mt-5 pt-4 border-t border-canvas-200">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500 mb-2">
+            Previous corrections ({initialCorrections.length})
+          </h4>
+          <ul className="space-y-2.5">
+            {initialCorrections.map((c) => (
+              <li
+                key={c.id}
+                className="rounded-lg border border-canvas-200 bg-canvas-50 px-3 py-2.5"
+              >
+                {c.error_types?.length > 0 && (
+                  <div className="mb-1.5 flex flex-wrap gap-1">
+                    {c.error_types.map((k) => (
+                      <span
+                        key={k}
+                        className="inline-flex items-center rounded-full bg-amber-50 text-amber-800 ring-1 ring-amber-200 px-1.5 py-0.5 text-[10px] font-medium"
+                      >
+                        {ERROR_TYPES.find((t) => t.key === k)?.label || k}
+                      </span>
+                    ))}
+                    {c.make_reusable_rule && (
+                      <span className="inline-flex items-center rounded-full bg-blue-50 text-blue-700 ring-1 ring-blue-200 px-1.5 py-0.5 text-[10px] font-semibold">
+                        Reusable rule
+                      </span>
+                    )}
+                  </div>
+                )}
+                <p className="text-[13px] text-gray-800 whitespace-pre-wrap leading-relaxed">
+                  {c.correction_text}
+                </p>
+                {c.make_reusable_rule && c.future_rule_instruction && (
+                  <div className="mt-2 pt-2 border-t border-canvas-200/60">
+                    <p className="text-[10.5px] font-semibold uppercase tracking-wider text-blue-700 mb-0.5">
+                      Future-rule instruction
+                    </p>
+                    <p className="text-[12.5px] text-gray-700 whitespace-pre-wrap leading-relaxed">
+                      {c.future_rule_instruction}
+                    </p>
+                    {c.promoted_rule && (
+                      <p className="mt-1.5 text-[10.5px] text-gray-500">
+                        Rule #{c.promoted_rule.id}
+                        <span className="text-gray-300"> · </span>
+                        {c.promoted_rule.scope_label}
+                        <span className="text-gray-300"> · </span>
+                        {c.promoted_rule.confidence_policy_label}
+                        {!c.promoted_rule.is_active && (
+                          <span className="ml-2 text-amber-700 font-medium">(inactive)</span>
+                        )}
+                      </p>
+                    )}
+                  </div>
+                )}
+                <p className="mt-1.5 text-[10.5px] text-gray-500">
+                  {c.created_by_name || "Someone"}
+                  <span className="text-gray-300"> · </span>
+                  <span className="font-mono tabular-nums">{fmtDateTime(c.created_at)}</span>
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* Parse "[AI-EXTRACTED:<model>] from <filename>" — the stable prefix the
+ * bills create drawer writes onto Bill.notes when the draft was prefilled
+ * by OCR. Returns null when the bill was created manually so the panel
+ * skips the AI provenance strip. */
+function parseAISource(notes: string): { model: string; filename: string | null } | null {
+  if (!notes) return null;
+  const m = notes.match(/^\[AI-EXTRACTED:([^\]]+)\](?:\s+from\s+(\S+))?/);
+  if (!m) return null;
+  return { model: m[1].trim(), filename: m[2] || null };
 }
 
 

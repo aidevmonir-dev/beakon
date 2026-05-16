@@ -2,14 +2,25 @@
 
 /* Employment — add employee.
  *
- * Captures the employee's identity, employer (entity), employment type,
- * title and dates. Manager FK is left to the detail page once people
- * exist; keeps the create form approachable for the first hire.
+ * Two-section form: Personal · Role / employment.
+ *
+ *   Personal       - first name, last name, email, phone
+ *   Role           - entity, employment type, title, manager (if any),
+ *                    start date, end date (for contract types)
+ *   Notes          - free text
+ *
+ * Manager picker appears only when the org already has at least one
+ * employee — keeps the form minimal for the first hire.
+ *
+ * "Save and add another" resets the form (keeps entity + role defaults)
+ * after a successful create — for batch onboarding without round-tripping
+ * to the detail page each time.
  */
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  AlertCircle, ArrowRight, Briefcase, CalendarRange, Mail, Phone, User,
+  AlertCircle, ArrowRight, Briefcase, CalendarRange, IdCard, Mail, Phone,
+  RefreshCcw, User, UserCog, Users,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/ui/page-header";
@@ -23,6 +34,13 @@ interface Entity {
   entity_type: string;
 }
 
+interface EmployeeOpt {
+  id: number;
+  full_name: string;
+  title: string;
+  entity: number;
+}
+
 
 const EMPLOYMENT_TYPES = [
   { value: "full_time",  label: "Full-time" },
@@ -32,12 +50,17 @@ const EMPLOYMENT_TYPES = [
   { value: "other",      label: "Other" },
 ];
 
+// Types that typically have a defined end date — surface the `end_date`
+// field for these. (Full-time / part-time hires stay open-ended.)
+const TYPES_WITH_END_DATE = new Set(["contractor", "intern", "other"]);
+
 
 export default function NewEmployeePage() {
   const router = useRouter();
 
   const [entities, setEntities] = useState<Entity[]>([]);
   const [loadingEntities, setLoadingEntities] = useState(true);
+  const [existingEmployees, setExistingEmployees] = useState<EmployeeOpt[]>([]);
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -46,11 +69,14 @@ export default function NewEmployeePage() {
   const [title, setTitle] = useState("");
   const [employmentType, setEmploymentType] = useState("full_time");
   const [entityId, setEntityId] = useState<number | "">("");
+  const [managerId, setManagerId] = useState<number | "">("");
   const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [notes, setNotes] = useState("");
 
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [savedFlash, setSavedFlash] = useState<string | null>(null);
 
   useEffect(() => {
     api.get<{ results: Entity[] } | Entity[]>("/beakon/entities/", { is_active: "true" })
@@ -62,13 +88,41 @@ export default function NewEmployeePage() {
       })
       .catch(() => setEntities([]))
       .finally(() => setLoadingEntities(false));
+
+    api.get<{ results: EmployeeOpt[] } | EmployeeOpt[]>("/beakon/employees/", { is_active: "true" })
+      .then((d) => setExistingEmployees(Array.isArray(d) ? d : (d?.results ?? [])))
+      .catch(() => setExistingEmployees([]));
   }, []);
 
-  const submit = async (e: React.FormEvent) => {
+  // Manager candidates = active employees on the same entity (different
+  // entity → different employer; cross-entity reporting is rare enough
+  // to set on the detail page).
+  const managerOptions = useMemo(
+    () => existingEmployees.filter((e) => entityId !== "" && e.entity === entityId),
+    [existingEmployees, entityId],
+  );
+
+  const showEndDate = TYPES_WITH_END_DATE.has(employmentType);
+
+  function resetForNext() {
+    setFirstName("");
+    setLastName("");
+    setEmail("");
+    setPhone("");
+    setTitle("");
+    // Keep entity, employment type, manager so batch hires on one team
+    // don't have to re-pick the same three dropdowns.
+    setStartDate("");
+    setEndDate("");
+    setNotes("");
+    setError("");
+  }
+
+  const submit = async (e: React.FormEvent, andAnother = false) => {
     e.preventDefault();
     setError("");
     if (!firstName.trim() && !lastName.trim()) {
-      setError("Enter the employee's name."); return;
+      setError("Enter the employee's first or last name."); return;
     }
     if (!entityId) {
       setError("Pick the entity that employs this person."); return;
@@ -76,7 +130,7 @@ export default function NewEmployeePage() {
 
     setSubmitting(true);
     try {
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         first_name: firstName.trim(),
         last_name: lastName.trim(),
         email: email.trim(),
@@ -88,16 +142,32 @@ export default function NewEmployeePage() {
         is_active: true,
       };
       if (startDate) payload.start_date = startDate;
-      const created = await api.post<{ id: number }>("/beakon/employees/", payload);
+      if (showEndDate && endDate) payload.end_date = endDate;
+      if (managerId !== "") payload.manager = managerId;
+
+      const created = await api.post<{ id: number; full_name: string }>(
+        "/beakon/employees/", payload,
+      );
+
+      if (andAnother) {
+        setSavedFlash(`Added ${created.full_name || "employee"}. Add another below.`);
+        // Bring the newly-created employee into the manager pool for the
+        // *next* hire on the same team without an extra fetch.
+        setExistingEmployees((prev) => [...prev, {
+          id: created.id,
+          full_name: created.full_name || `${firstName} ${lastName}`.trim(),
+          title: title.trim(),
+          entity: Number(entityId),
+        }]);
+        resetForNext();
+        setSubmitting(false);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+
       router.push(`/dashboard/employment/${created.id}`);
     } catch (err: any) {
-      setError(
-        err?.detail ||
-        err?.first_name?.[0] ||
-        err?.last_name?.[0] ||
-        err?.employee_number?.[0] ||
-        "Failed to add employee.",
-      );
+      setError(fmtCreateError(err));
       setSubmitting(false);
     }
   };
@@ -106,7 +176,7 @@ export default function NewEmployeePage() {
     <div>
       <PageHeader
         title="Add employee"
-        description="The basics — you can add manager, contracts and other details from the detail page."
+        description="The basics — you can add contracts, compensation and other details from the detail page."
       />
 
       <div className="mt-2 mb-4">
@@ -116,25 +186,28 @@ export default function NewEmployeePage() {
       </div>
 
       <form
-        onSubmit={submit}
-        className="rounded-2xl border border-canvas-200/70 bg-white p-6 shadow-[0_2px_8px_rgba(15,23,42,0.04)] max-w-2xl"
+        onSubmit={(e) => submit(e, false)}
+        className="rounded-xl border border-canvas-200/70 bg-white p-6 max-w-2xl"
       >
-        <div className="mb-5 flex items-center gap-2">
-          <div className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-            <User className="h-4.5 w-4.5" />
+        {savedFlash && (
+          <div className="mb-4 flex items-start gap-2 rounded-lg border border-mint-200 bg-mint-50 p-3 text-xs text-mint-800">
+            <RefreshCcw className="h-4 w-4 mt-0.5 shrink-0" />
+            <span>{savedFlash}</span>
           </div>
-          <div>
-            <h2 className="text-[14px] font-semibold text-gray-900">Identity &amp; role</h2>
-            <p className="text-[11.5px] text-gray-500">Employee number is auto-generated.</p>
-          </div>
-        </div>
+        )}
 
         {error && (
           <div className="mb-4 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-            <span>{error}</span>
+            <span className="whitespace-pre-wrap">{error}</span>
           </div>
         )}
+
+        <SectionHeader
+          icon={User}
+          title="Personal"
+          subtitle="Identity and contact. Email is optional but recommended for invites."
+        />
 
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -142,14 +215,14 @@ export default function NewEmployeePage() {
               <input
                 type="text" className="input"
                 value={firstName} onChange={(e) => setFirstName(e.target.value)}
-                placeholder="Anna" autoFocus required autoComplete="given-name"
+                placeholder="Anna" autoFocus autoComplete="given-name"
               />
             </Field>
             <Field label="Last name" required>
               <input
                 type="text" className="input"
                 value={lastName} onChange={(e) => setLastName(e.target.value)}
-                placeholder="Müller" required autoComplete="family-name"
+                placeholder="Müller" autoComplete="family-name"
               />
             </Field>
           </div>
@@ -176,18 +249,17 @@ export default function NewEmployeePage() {
               </div>
             </Field>
           </div>
+        </div>
 
-          <Field label="Job title">
-            <div className="relative">
-              <Briefcase className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <input
-                type="text" className="input pl-9"
-                value={title} onChange={(e) => setTitle(e.target.value)}
-                placeholder="Senior Accountant"
-              />
-            </div>
-          </Field>
+        <div className="my-6 border-t border-canvas-100" />
 
+        <SectionHeader
+          icon={IdCard}
+          title="Role & employment"
+          subtitle="Employer, type, title and dates. Employee number is auto-generated."
+        />
+
+        <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Employer (entity)" required>
               {loadingEntities ? (
@@ -200,7 +272,12 @@ export default function NewEmployeePage() {
                 <select
                   className="input"
                   value={entityId}
-                  onChange={(e) => setEntityId(Number(e.target.value))}
+                  onChange={(e) => {
+                    setEntityId(Number(e.target.value));
+                    // Reset manager when switching employer — managers
+                    // are scoped to a single entity.
+                    setManagerId("");
+                  }}
                 >
                   {entities.map((e) => (
                     <option key={e.id} value={e.id}>{e.code} · {e.name}</option>
@@ -221,17 +298,68 @@ export default function NewEmployeePage() {
             </Field>
           </div>
 
-          <Field label="Start date">
+          <Field label="Job title">
             <div className="relative">
-              <CalendarRange className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Briefcase className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
-                type="date" className="input pl-9"
-                value={startDate} onChange={(e) => setStartDate(e.target.value)}
+                type="text" className="input pl-9"
+                value={title} onChange={(e) => setTitle(e.target.value)}
+                placeholder="Senior Accountant"
               />
             </div>
           </Field>
 
-          <Field label="Notes" hint="Anything that doesn't fit the structured fields.">
+          {managerOptions.length > 0 && (
+            <Field label="Manager"
+              hint={`Choose from the ${managerOptions.length} existing employee${managerOptions.length === 1 ? "" : "s"} on this entity. Optional.`}>
+              <div className="relative">
+                <UserCog className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <select
+                  className="input pl-9"
+                  value={managerId}
+                  onChange={(e) => setManagerId(e.target.value === "" ? "" : Number(e.target.value))}
+                >
+                  <option value="">— No manager —</option>
+                  {managerOptions.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.full_name}{m.title ? ` · ${m.title}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </Field>
+          )}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Start date">
+              <div className="relative">
+                <CalendarRange className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="date" className="input pl-9"
+                  value={startDate} onChange={(e) => setStartDate(e.target.value)}
+                />
+              </div>
+            </Field>
+            {showEndDate ? (
+              <Field
+                label="End date"
+                hint="For contract / intern / fixed-term roles. Leave blank if open-ended."
+              >
+                <div className="relative">
+                  <CalendarRange className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <input
+                    type="date" className="input pl-9"
+                    min={startDate || undefined}
+                    value={endDate} onChange={(e) => setEndDate(e.target.value)}
+                  />
+                </div>
+              </Field>
+            ) : (
+              <div className="hidden sm:block" />
+            )}
+          </div>
+
+          <Field label="Notes" hint="Anything that doesn't fit the structured fields above.">
             <textarea
               className="input min-h-[80px]"
               value={notes} onChange={(e) => setNotes(e.target.value)}
@@ -240,12 +368,48 @@ export default function NewEmployeePage() {
           </Field>
         </div>
 
-        <div className="mt-6 flex justify-end">
-          <button type="submit" className="btn-primary" disabled={submitting || entities.length === 0}>
-            {submitting ? "Adding…" : <>Add employee <ArrowRight className="w-4 h-4 ml-1.5" /></>}
+        <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:items-center">
+          {existingEmployees.length > 0 && (
+            <button
+              type="button"
+              onClick={(e) => submit(e, true)}
+              className="btn-secondary inline-flex items-center"
+              disabled={submitting || entities.length === 0}
+              title="Save this employee and reset the form for the next hire on this team"
+            >
+              <Users className="w-4 h-4 mr-1.5" />
+              {submitting ? "Saving…" : "Save and add another"}
+            </button>
+          )}
+          <button
+            type="submit"
+            className="btn-primary inline-flex items-center gap-1.5"
+            disabled={submitting || entities.length === 0}
+          >
+            {submitting ? "Adding…" : <>Add employee <ArrowRight className="w-4 h-4" /></>}
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+
+function SectionHeader({
+  icon: Icon, title, subtitle,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string; subtitle: string;
+}) {
+  return (
+    <div className="mb-4 flex items-center gap-3">
+      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-700">
+        <Icon className="h-4 w-4" />
+      </span>
+      <div>
+        <h2 className="text-[14px] font-semibold text-gray-900">{title}</h2>
+        <p className="text-[11.5px] text-gray-500">{subtitle}</p>
+      </div>
     </div>
   );
 }
@@ -265,4 +429,22 @@ function Field({ label, hint, required, children }: {
       {hint && <span className="mt-1 block text-[11px] text-gray-400 leading-relaxed">{hint}</span>}
     </label>
   );
+}
+
+
+/** Pulls every meaningful message out of a DRF validation error response
+ *  rather than guessing one of four fields. */
+function fmtCreateError(err: any): string {
+  if (!err || typeof err !== "object") return "Failed to add employee.";
+  if (typeof err.detail === "string") return err.detail;
+  if (err?.error?.message) return err.error.message;
+  const lines: string[] = [];
+  for (const [k, v] of Object.entries(err)) {
+    if (k === "status" || k === "detail" || k === "error") continue;
+    const msg = Array.isArray(v) ? v.join(" ") : String(v);
+    if (!msg) continue;
+    const label = k.replace(/_/g, " ");
+    lines.push(`${label.charAt(0).toUpperCase()}${label.slice(1)}: ${msg}`);
+  }
+  return lines.length ? lines.join("\n") : "Failed to add employee.";
 }

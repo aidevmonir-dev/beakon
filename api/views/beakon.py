@@ -8,12 +8,12 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import ProtectedError
 from django.utils import timezone
-from rest_framework import generics, status as http
+from rest_framework import generics, mixins, status as http
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.viewsets import GenericViewSet, ModelViewSet
+from rest_framework.viewsets import GenericViewSet, ModelViewSet, ReadOnlyModelViewSet
 
 from api.mixins import OrganizationFilterMixin
 from api.permissions import IsOrganizationMember
@@ -39,7 +39,9 @@ from api.serializers.beakon import (
     RelatedPartySerializer,
     TaxLotSerializer,
     ApprovalActionSerializer,
+    BillCorrectionSerializer,
     BillCreateSerializer,
+    LearningRuleSerializer,
     BillDetailSerializer,
     BillPaymentSerializer,
     BillRejectSerializer,
@@ -71,7 +73,9 @@ from beakon_core.models import (
     AccountGroup,
     ApprovalAction,
     Bill,
+    BillCorrection,
     CoADefinition,
+    LearningRule,
     CoAMapping,
     ControlledListEntry,
     Currency,
@@ -118,6 +122,45 @@ def _beakon_error_response(exc: BeakonError):
         {"error": {"code": exc.code, "message": exc.message, "details": exc.details}},
         status=http.HTTP_422_UNPROCESSABLE_ENTITY,
     )
+
+
+def _sniff_content_type(fh, stored: str, filename: str) -> str:
+    """Pick the MIME type to serve a SourceDocument with.
+
+    Some uploads landed with ``application/octet-stream`` because the
+    browser didn't recognise the file at upload time, and browsers refuse
+    to render unknown-typed blobs inline. Peek the magic bytes and, when
+    they match a known signature, override the stored type so the
+    cross-check preview pane renders the document instead of triggering
+    a download. Falls back to the filename extension, then the stored
+    type as a last resort.
+    """
+    pos = fh.tell()
+    try:
+        head = fh.read(12)
+    finally:
+        fh.seek(pos)
+    if head.startswith(b"%PDF-"):
+        return "application/pdf"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith(b"GIF87a") or head.startswith(b"GIF89a"):
+        return "image/gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    stored_lc = (stored or "").lower()
+    if stored_lc and stored_lc != "application/octet-stream":
+        return stored_lc
+    name = (filename or "").lower()
+    if name.endswith(".pdf"): return "application/pdf"
+    if name.endswith(".png"): return "image/png"
+    if name.endswith((".jpg", ".jpeg")): return "image/jpeg"
+    if name.endswith(".gif"): return "image/gif"
+    if name.endswith(".webp"): return "image/webp"
+    if name.endswith(".svg"): return "image/svg+xml"
+    return stored_lc or "application/octet-stream"
 
 
 # ── Reference data ──────────────────────────────────────────────────────────
@@ -289,12 +332,135 @@ class DimensionTypeViewSet(OrganizationFilterMixin, ModelViewSet):
     serializer_class = DimensionTypeSerializer
     permission_classes = [IsAuthenticated, IsOrganizationMember]
     queryset = DimensionType.objects.all()
-    filterset_fields = ["active_flag", "mandatory_flag"]
+    filterset_fields = ["active_flag", "mandatory_flag", "category"]
     search_fields = ["code", "name", "description", "applies_to"]
-    ordering_fields = ["code", "name"]
+    ordering_fields = ["code", "name", "category"]
 
     def perform_create(self, serializer):
         serializer.save(organization=self.request.organization)
+
+    # Dedicated detail pages override the generic blueprint URL.
+    # When a DimensionType.code lands here, the hub row points to the
+    # bespoke screen instead of /dashboard/blueprint/data/dimension-values.
+    _DEDICATED_DETAIL_PATHS = {
+        "LOCATION": "/dashboard/dimensions/location",
+        "CC": "/dashboard/dimensions/cost-centre",
+        "CCY": "/dashboard/dimensions/currencies",
+        "LOAN": "/dashboard/dimensions/loans",
+        # RP and FAM both surface RelatedParty rows, filtered by party_form
+        # (entity vs person) on their respective pages.
+        "RP": "/dashboard/dimensions/intercompany",
+        "FAM": "/dashboard/dimensions/family-members",
+    }
+
+    # Codes that get rendered as a synthetic hub row backed by a
+    # different table (e.g. global Currency registry). Suppress the
+    # generic DimensionType row so the hub shows one entry per axis.
+    _SYNTHETIC_ROW_CODES = {"CCY"}
+
+    @action(detail=False, methods=["get"], url_path="hub")
+    def hub(self, request):
+        """One-shot payload for the /dashboard/dimensions hub.
+
+        Returns the rows Thomas mocked: dimension axis, category (his
+        "type" column — financial/operational/reporting/other), and the
+        active value count, plus synthetic rows for axes that live
+        outside the DimensionType table (Subaccounts inside CoA,
+        Currencies in the global ISO registry) so the hub feels
+        comprehensive.
+        """
+        from django.db.models import Count, Q
+        organization = request.organization
+
+        rows = []
+
+        # Real dimension types — count only active values.
+        types = (
+            DimensionType.objects
+            .filter(organization=organization, active_flag=True)
+            .annotate(
+                value_count=Count(
+                    "values",
+                    filter=Q(values__active_flag=True),
+                    distinct=True,
+                ),
+            )
+            .order_by("category", "code")
+        )
+        for dt in types:
+            if dt.code in self._SYNTHETIC_ROW_CODES:
+                # Rendered as a synthetic row below — skip the dimension-type
+                # row so the hub doesn't show two entries for the same axis.
+                continue
+            detail_path = self._DEDICATED_DETAIL_PATHS.get(
+                dt.code,
+                f"/dashboard/blueprint/data/dimension-values?type={dt.code}",
+            )
+            rows.append({
+                "kind": "dimension_type",
+                "code": dt.code,
+                "name": dt.name,
+                "category": dt.category,
+                "value_count": dt.value_count,
+                "detail_path": detail_path,
+            })
+
+        # Synthetic Subaccounts row — Thomas's "subaccount is also a
+        # dimension" framing surfaces as a row alongside the rest. Count
+        # active leaf accounts (postable, non-header) on this org.
+        subacc_count = (
+            Account.objects
+            .filter(
+                organization=organization,
+                is_active=True,
+                header_flag=False,
+                posting_allowed=True,
+            )
+            .count()
+        )
+        rows.insert(0, {
+            "kind": "virtual_subaccount",
+            "code": "SUBACCOUNT",
+            "name": "Subaccounts",
+            "category": bc.DIM_CATEGORY_FINANCIAL,
+            "value_count": subacc_count,
+            "detail_path": "/dashboard/dimensions/subaccounts",
+        })
+
+        # Synthetic Chart of Accounts row — Thomas (2026-05-12): "Like
+        # with the other dimensions, pls show those lists in Beakon for
+        # the user to see them." The CoA is the ledger's spine; surface
+        # it as a peer of Subaccounts so the hub is the single browsable
+        # entry point for every master list.
+        coa_count = (
+            Account.objects
+            .filter(organization=organization, is_active=True)
+            .count()
+        )
+        rows.insert(0, {
+            "kind": "virtual_chart_of_accounts",
+            "code": "COA",
+            "name": "Chart of Accounts",
+            "category": bc.DIM_CATEGORY_FINANCIAL,
+            "value_count": coa_count,
+            "detail_path": "/dashboard/accounts",
+        })
+
+        # Synthetic Currencies row — ISO 4217 currencies live in a global
+        # Currency table (rarely changes), not as DimensionValues. Surface
+        # them in the hub so users see every classification axis in one
+        # place.
+        currency_count = Currency.objects.filter(is_active=True).count()
+        rows.insert(1, {
+            "kind": "virtual_currency",
+            "code": "CCY",
+            "name": "Currencies",
+            "category": bc.DIM_CATEGORY_FINANCIAL,
+            "value_count": currency_count,
+            "detail_path": "/dashboard/dimensions/currencies",
+        })
+
+        return Response({"rows": rows})
 
 
 class DimensionValueViewSet(OrganizationFilterMixin, ModelViewSet):
@@ -317,6 +483,77 @@ class DimensionValueViewSet(OrganizationFilterMixin, ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(organization=self.request.organization)
+
+
+class LearningRuleViewSet(
+    OrganizationFilterMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    GenericViewSet,
+):
+    """B3/B6 — Rules registry. List/retrieve/PATCH plus deactivate/activate.
+
+    Created via the bill-corrections POST endpoint (auto-promotion when
+    make_reusable_rule=True). Creation here is intentionally not exposed —
+    rules only enter through corrections so they always carry provenance.
+    PATCH is allowed for the editable fields (human_instruction,
+    confidence_policy, scope) and the active toggles run through dedicated
+    actions for clarity in the audit trail.
+    """
+    serializer_class = LearningRuleSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationMember]
+    queryset = (
+        LearningRule.objects
+        .select_related("vendor", "entity", "approved_by",
+                        "created_from_invoice", "created_from_correction")
+    )
+    filterset_fields = ["vendor", "entity", "is_active", "scope",
+                         "confidence_policy"]
+    search_fields = ["human_instruction", "invoice_pattern",
+                      "customer_number", "correction_type"]
+    ordering_fields = ["created_at", "last_used", "success_count",
+                        "override_count"]
+    http_method_names = ["get", "patch", "post", "head", "options"]
+
+    _PATCHABLE_FIELDS = {
+        "human_instruction",
+        "confidence_policy",
+        "scope",
+        "structured_accounting_logic",
+        "trigger_conditions",
+        "invoice_pattern",
+        "customer_number",
+        "correction_type",
+    }
+
+    def partial_update(self, request, *args, **kwargs):
+        # Whitelist what reviewers can edit on a rule. Counters / provenance
+        # / approval audit fields are intentionally not patchable from the
+        # API — they're maintained by the feedback loop and the original
+        # correction promotion.
+        unknown = set(request.data.keys()) - self._PATCHABLE_FIELDS
+        if unknown:
+            return Response(
+                {"detail": "Fields not editable via PATCH",
+                 "fields": sorted(unknown)},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+        return super().partial_update(request, *args, **kwargs)
+
+    @action(detail=True, methods=["post"], url_path="deactivate")
+    def deactivate(self, request, pk=None):
+        rule = self.get_object()
+        rule.is_active = False
+        rule.save(update_fields=["is_active", "updated_at"])
+        return Response(self.get_serializer(rule).data)
+
+    @action(detail=True, methods=["post"], url_path="activate")
+    def activate(self, request, pk=None):
+        rule = self.get_object()
+        rule.is_active = True
+        rule.save(update_fields=["is_active", "updated_at"])
+        return Response(self.get_serializer(rule).data)
 
 
 class ControlledListEntryViewSet(OrganizationFilterMixin, ModelViewSet):
@@ -993,6 +1230,7 @@ class BillViewSet(OrganizationFilterMixin, GenericViewSet):
                 tax_amount=v.get("tax_amount"),
                 description=v.get("description", ""),
                 explanation=v.get("explanation", ""),
+                ai_applied_rule_ids=v.get("ai_applied_rule_ids") or [],
                 user=request.user,
             )
         except BeakonError as e:
@@ -1083,6 +1321,148 @@ class BillViewSet(OrganizationFilterMixin, GenericViewSet):
         except BeakonError as e:
             return _beakon_error_response(e)
         return Response(BillDetailSerializer(bill).data)
+
+    # Editing the rationale is allowed only while the bill is still mutable
+    # (draft / pending_approval). Once approved, the accrual JE has posted
+    # and the explanation propagates to it — locking here mirrors the JE
+    # locking rule so the audit trail stays consistent.
+    @action(detail=True, methods=["patch"], url_path="explanation")
+    def update_explanation(self, request, pk=None):
+        bill = self.get_object()
+        if bill.status not in ("draft", "pending_approval"):
+            return Response(
+                {"detail": (
+                    f"Explanation is locked on {bill.status} bills. "
+                    "Return the bill to draft to edit it."
+                )},
+                status=http.HTTP_409_CONFLICT,
+            )
+        explanation = request.data.get("explanation", "")
+        if not isinstance(explanation, str):
+            return Response({"detail": "explanation must be a string"},
+                            status=http.HTTP_400_BAD_REQUEST)
+        bill.explanation = explanation
+        bill.save(update_fields=["explanation", "updated_at"])
+        return Response(BillDetailSerializer(bill).data)
+
+    # Thomas 2026-05-12: bills carry a "what should Beakon fix next time"
+    # note that captures *why* the user corrected the AI proposal. Phase A
+    # = capture + history. Phase B will retrieve these into the next OCR
+    # extraction prompt so Beakon learns per vendor. See
+    # project_ai_correction_field memory.
+    @action(detail=True, methods=["get", "post"], url_path="corrections")
+    def corrections(self, request, pk=None):
+        bill = self.get_object()
+        if request.method.lower() == "get":
+            qs = bill.corrections.select_related("created_by", "vendor")
+            return Response(BillCorrectionSerializer(qs, many=True).data)
+
+        # POST — append a new correction. Allowed in any status so reviewers
+        # can still teach Beakon after a bill is posted; the bill itself
+        # isn't mutated.
+        text = (request.data.get("correction_text") or "").strip()
+        if not text:
+            return Response(
+                {"detail": "correction_text is required"},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+        snapshot = request.data.get("ai_proposal_snapshot") or {}
+        if not isinstance(snapshot, dict):
+            return Response(
+                {"detail": "ai_proposal_snapshot must be an object"},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+        # Structured fields from Thomas's 2026-05-12 spec.
+        error_types = request.data.get("error_types") or []
+        if not isinstance(error_types, list) or not all(
+            isinstance(t, str) for t in error_types
+        ):
+            return Response(
+                {"detail": "error_types must be a list of strings"},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+        make_reusable = bool(request.data.get("make_reusable_rule", False))
+        future_instruction = (
+            request.data.get("future_rule_instruction") or ""
+        ).strip()
+        # If the user opted to remember the rule, require the instruction —
+        # an empty instruction makes the rule unactionable.
+        if make_reusable and not future_instruction:
+            return Response(
+                {"detail":
+                    "future_rule_instruction is required when "
+                    "make_reusable_rule is true."},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+
+        correction = BillCorrection.objects.create(
+            bill=bill,
+            organization=bill.organization,
+            vendor=bill.vendor,
+            correction_text=text,
+            error_types=error_types,
+            make_reusable_rule=make_reusable,
+            future_rule_instruction=future_instruction,
+            ai_proposal_snapshot=snapshot,
+            created_by=request.user if request.user.is_authenticated else None,
+        )
+
+        # B6 — feedback loop: this correction means the AI's proposal was
+        # wrong on this bill, so every LearningRule the AI followed gets an
+        # override strike. The success_count was already incremented on
+        # approve; the override here is what surfaces "this rule is making
+        # things worse" in the rules registry.
+        if bill.ai_applied_rule_ids:
+            from django.db.models import F
+            from django.utils import timezone as _tz
+            _now = _tz.now()
+            LearningRule.objects.filter(
+                organization=bill.organization,
+                id__in=bill.ai_applied_rule_ids,
+            ).update(
+                override_count=F("override_count") + 1,
+                last_used=_now,
+                updated_at=_now,
+            )
+
+        # B3 — promote opt-in corrections into LearningRule rows so the
+        # rules registry (and Phase 5 OCR retrieval) has structured input.
+        # The correction itself stays as the audit row; the LearningRule
+        # is the canonical "this is how Beakon should behave next time".
+        if make_reusable:
+            from django.utils import timezone
+            primary_type = error_types[0] if error_types else ""
+            LearningRule.objects.create(
+                organization=bill.organization,
+                vendor=bill.vendor,
+                entity=bill.entity,
+                customer_number="",  # Surfaced manually for now; OCR will
+                                      # extract this in a later phase.
+                invoice_pattern="",
+                trigger_conditions={
+                    "vendor_id": bill.vendor_id,
+                    "vendor_code": bill.vendor.code,
+                    "entity_id": bill.entity_id,
+                    "entity_code": bill.entity.code,
+                },
+                correction_type=primary_type,
+                human_instruction=future_instruction,
+                structured_accounting_logic={},
+                scope=LearningRule.SCOPE_VENDOR,
+                # Default to require_review on creation per Thomas §8 —
+                # the first application of a brand-new rule is supervised.
+                confidence_policy=LearningRule.POLICY_REQUIRE_REVIEW,
+                created_from_invoice=bill,
+                created_from_correction=correction,
+                approved_by=request.user if request.user.is_authenticated else None,
+                approved_at=timezone.now(),
+                is_active=True,
+            )
+
+        return Response(
+            BillCorrectionSerializer(correction).data,
+            status=http.HTTP_201_CREATED,
+        )
 
 
 # ── Invoices (AR) ───────────────────────────────────────────────────────────
@@ -1242,6 +1622,28 @@ class InvoiceViewSet(OrganizationFilterMixin, GenericViewSet):
             InvoiceService.cancel(invoice, user=request.user)
         except BeakonError as e:
             return _beakon_error_response(e)
+        return Response(InvoiceDetailSerializer(invoice).data)
+
+    # Mirror of BillViewSet.update_explanation: editable only while the
+    # invoice is still mutable (draft / pending_approval). Once issued the
+    # explanation propagates to the AR JE and locks.
+    @action(detail=True, methods=["patch"], url_path="explanation")
+    def update_explanation(self, request, pk=None):
+        invoice = self.get_object()
+        if invoice.status not in ("draft", "pending_approval"):
+            return Response(
+                {"detail": (
+                    f"Explanation is locked on {invoice.status} invoices. "
+                    "Return the invoice to draft to edit it."
+                )},
+                status=http.HTTP_409_CONFLICT,
+            )
+        explanation = request.data.get("explanation", "")
+        if not isinstance(explanation, str):
+            return Response({"detail": "explanation must be a string"},
+                            status=http.HTTP_400_BAD_REQUEST)
+        invoice.explanation = explanation
+        invoice.save(update_fields=["explanation", "updated_at"])
         return Response(InvoiceDetailSerializer(invoice).data)
 
 
@@ -1409,6 +1811,32 @@ from beakon_core.services import OCRService  # noqa: E402
 def _sse(payload: dict) -> bytes:
     """Format one Server-Sent Events frame."""
     return f"data: {_json.dumps(payload)}\n\n".encode("utf-8")
+
+
+def _serialise_applied_rules(organization, rule_ids):
+    """B5 — turn applied_rule_ids the AI returned into a list of
+    {id, vendor_code, scope_label, human_instruction} dicts the frontend
+    can render directly. Filters to rules the org actually owns so a
+    hallucinated id doesn't show up in the UI.
+    """
+    if not rule_ids:
+        return []
+    qs = (
+        LearningRule.objects
+        .filter(organization=organization, id__in=rule_ids)
+        .select_related("vendor")
+    )
+    return [
+        {
+            "id": r.id,
+            "vendor_code": r.vendor.code if r.vendor_id else None,
+            "vendor_name": r.vendor.name if r.vendor_id else None,
+            "scope_label": r.get_scope_display(),
+            "correction_type": r.correction_type,
+            "human_instruction": r.human_instruction,
+        }
+        for r in qs
+    ]
 
 
 class AIBillDraftStreamView(APIView):
@@ -1604,13 +2032,13 @@ class OCRExtractStreamView(APIView):
 
             # ── Server-side vendor + account match ─────────────────────
             warnings: list[str] = []
+            from django.db.models import Q
 
             # Vendor: case-insensitive name OR legal_name match. Same
             # rule the JE-creation path uses — keeps both flows in sync.
             matched_vendor = None
             vendor_name = (extracted.get("vendor_name") or "").strip()
             if vendor_name:
-                from django.db.models import Q
                 v = (
                     Vendor.objects
                     .filter(organization=organization, is_active=True)
@@ -1638,9 +2066,9 @@ class OCRExtractStreamView(APIView):
             # COA. If not present (or not on this entity), surface as a
             # warning and let the user pick in the drawer.
             matched_account_id = None
+            suggested_account_info = None
             suggested_account_id = extracted.get("suggested_account_id")
             if suggested_account_id:
-                from django.db.models import Q
                 acc = (
                     Account.objects
                     .filter(
@@ -1658,6 +2086,89 @@ class OCRExtractStreamView(APIView):
                         "AI-suggested expense account is not on this entity's "
                         "chart of accounts — please pick one manually."
                     )
+                # Resolve globally so the drawer can show what AI proposed
+                # even when the ID didn't match this entity's COA. Lets the
+                # reviewer read the AI's reasoning + suggested code/name
+                # next to the empty line dropdown.
+                glob = (
+                    Account.objects
+                    .filter(organization=organization, id=suggested_account_id)
+                    .values("id", "code", "name", "is_active", "entity_id")
+                    .first()
+                )
+                suggested_account_info = {
+                    "id": suggested_account_id,
+                    "code": glob["code"] if glob else None,
+                    "name": glob["name"] if glob else None,
+                    "is_active": glob["is_active"] if glob else None,
+                    "on_other_entity": bool(
+                        glob and glob["entity_id"] and glob["entity_id"] != entity.id
+                    ),
+                    "matches_this_entity": matched_account_id is not None,
+                    "reasoning": extracted.get("suggested_account_reasoning") or "",
+                }
+
+            # B8a — vendor-default fallback. When the AI either gave no
+            # account or gave one that doesn't sit on this entity's CoA,
+            # but the matched Vendor has a default_expense_account
+            # configured, use the vendor default. The org has already
+            # taught Beakon "this vendor books to that account" — we
+            # should not make the reviewer pick it again.
+            used_vendor_default = False
+            if (
+                matched_account_id is None
+                and matched_vendor
+                and matched_vendor.get("default_expense_account")
+            ):
+                fallback = (
+                    Account.objects
+                    .filter(
+                        Q(entity=entity) | Q(entity__isnull=True),
+                        organization=organization,
+                        id=matched_vendor["default_expense_account"],
+                        is_active=True,
+                    )
+                    .first()
+                )
+                if fallback is not None:
+                    matched_account_id = fallback.id
+                    used_vendor_default = True
+                    warnings.append(
+                        f"AI wasn't confident — used {matched_vendor['code']}'s "
+                        f"default expense account ({fallback.code} · {fallback.name})."
+                    )
+
+            # B8c — validate the AI's ranked candidates against this
+            # entity's CoA. Drop invalid IDs (inactive, on another
+            # entity, hallucinated) so the frontend only sees pickable
+            # accounts. Hydrate each surviving entry with code+name so
+            # the UI can render "6100 · Telecom expense — 87%" without
+            # a second round-trip.
+            account_candidates = []
+            raw_candidates = extracted.get("account_candidates") or []
+            if raw_candidates:
+                cand_ids = [c["id"] for c in raw_candidates if c.get("id")]
+                valid = {
+                    a["id"]: a
+                    for a in Account.objects.filter(
+                        Q(entity=entity) | Q(entity__isnull=True),
+                        organization=organization,
+                        id__in=cand_ids,
+                        is_active=True,
+                    ).values("id", "code", "name", "account_type")
+                }
+                for c in raw_candidates:
+                    a = valid.get(c.get("id"))
+                    if a is None:
+                        continue
+                    account_candidates.append({
+                        "id": a["id"],
+                        "code": a["code"],
+                        "name": a["name"],
+                        "account_type": a["account_type"],
+                        "score": float(c.get("score") or 0.0),
+                        "reason": c.get("reason") or "",
+                    })
 
             # Echo low-confidence flags from the extractor so the UI can
             # tone-down the auto-prefill (e.g. red border on amount fields)
@@ -1688,19 +2199,41 @@ class OCRExtractStreamView(APIView):
                     "description": extracted.get("description"),
                     "line_items": [
                         {"description": li.get("description", ""),
-                         "amount": str(li.get("amount", "0"))}
+                         "amount": str(li.get("amount", "0")),
+                         # B7 — propagate absorption flags so the form
+                         # can render duplicates as strikethrough info
+                         # rows and exclude them from the JE.
+                         "is_absorbed": bool(li.get("is_absorbed", False)),
+                         "absorbed_note": li.get("absorbed_note", "")}
                         for li in (extracted.get("line_items") or [])
                     ],
+                    "customer_number": extracted.get("customer_number") or "",
+                    "suggested_rule_text": extracted.get("suggested_rule_text") or "",
                     "suggested_account_reasoning": extracted.get("suggested_account_reasoning"),
                     "accounting_standard_reasoning": extracted.get("accounting_standard_reasoning"),
                     "confidence": extracted.get("confidence"),
                     "confidence_in_account": extracted.get("confidence_in_account"),
+                    # B5: which LearningRules the AI followed on this
+                    # extraction. The frontend renders these as
+                    # "Beakon followed Rule #N" chips so the reviewer
+                    # knows what shaped the proposal.
+                    "applied_rule_ids": extracted.get("applied_rule_ids", []),
                     "model_used": extracted.get("model_used"),
                     "mode": extracted.get("mode"),
                 },
                 "matched_vendor": matched_vendor,
                 "matched_account_id": matched_account_id,
+                "suggested_account_info": suggested_account_info,
                 "entity_accounting_standard": entity.accounting_standard,
+                "applied_rules": _serialise_applied_rules(
+                    organization,
+                    extracted.get("applied_rule_ids", []),
+                ),
+                # B8 — server-validated alternative account picks.
+                # The frontend shows these as clickable chips when the
+                # bill line has no expense account set.
+                "account_candidates": account_candidates,
+                "used_vendor_default": used_vendor_default,
                 "warnings": warnings,
             })
 
@@ -1816,6 +2349,7 @@ class OCRExtractInvoiceStreamView(APIView):
             # re-validate at the API boundary in case the model
             # hallucinated an ID outside the prompt's COA list.
             matched_account_id = None
+            suggested_account_info = None
             suggested_account_id = extracted.get("suggested_account_id")
             if suggested_account_id:
                 from django.db.models import Q
@@ -1838,6 +2372,23 @@ class OCRExtractInvoiceStreamView(APIView):
                         "AI-suggested revenue account is not on this "
                         "entity's chart of accounts — please pick one manually."
                     )
+                glob = (
+                    Account.objects
+                    .filter(organization=organization, id=suggested_account_id)
+                    .values("id", "code", "name", "is_active", "entity_id")
+                    .first()
+                )
+                suggested_account_info = {
+                    "id": suggested_account_id,
+                    "code": glob["code"] if glob else None,
+                    "name": glob["name"] if glob else None,
+                    "is_active": glob["is_active"] if glob else None,
+                    "on_other_entity": bool(
+                        glob and glob["entity_id"] and glob["entity_id"] != entity.id
+                    ),
+                    "matches_this_entity": matched_account_id is not None,
+                    "reasoning": extracted.get("suggested_account_reasoning") or "",
+                }
 
             if extracted.get("confidence", 1.0) < 0.5:
                 warnings.append(
@@ -1866,9 +2417,16 @@ class OCRExtractInvoiceStreamView(APIView):
                     "description": extracted.get("description"),
                     "line_items": [
                         {"description": li.get("description", ""),
-                         "amount": str(li.get("amount", "0"))}
+                         "amount": str(li.get("amount", "0")),
+                         # B7 — propagate absorption flags so the form
+                         # can render duplicates as strikethrough info
+                         # rows and exclude them from the JE.
+                         "is_absorbed": bool(li.get("is_absorbed", False)),
+                         "absorbed_note": li.get("absorbed_note", "")}
                         for li in (extracted.get("line_items") or [])
                     ],
+                    "customer_number": extracted.get("customer_number") or "",
+                    "suggested_rule_text": extracted.get("suggested_rule_text") or "",
                     "suggested_account_reasoning": extracted.get("suggested_account_reasoning"),
                     "accounting_standard_reasoning": extracted.get("accounting_standard_reasoning"),
                     "confidence": extracted.get("confidence"),
@@ -1878,6 +2436,7 @@ class OCRExtractInvoiceStreamView(APIView):
                 },
                 "matched_customer": matched_customer,
                 "matched_account_id": matched_account_id,
+                "suggested_account_info": suggested_account_info,
                 "entity_accounting_standard": entity.accounting_standard,
                 "warnings": warnings,
             })
@@ -2394,6 +2953,114 @@ class JournalEntryViewSet(OrganizationFilterMixin, GenericViewSet):
             status=http.HTTP_201_CREATED,
         )
 
+    # ── Teach Beakon — corrections on a JE ──────────────────────────────
+    # Mirrors the /bills/<id>/corrections/ flow but anchored to a JE so
+    # manual / AI-extracted journal entries that don't go through Bills
+    # can still capture structured Teach signals + promote LearningRules.
+    @action(detail=True, methods=["get", "post"], url_path="corrections")
+    def corrections(self, request, pk=None):
+        from beakon_core.models import JECorrection, LearningRule, Vendor
+        from api.serializers.beakon import JECorrectionSerializer
+
+        entry = self.get_object()
+
+        if request.method.lower() == "get":
+            qs = entry.corrections.select_related("created_by", "vendor")
+            return Response(JECorrectionSerializer(qs, many=True).data)
+
+        # POST — append a new correction. Mirrors the bill path's payload.
+        text = (request.data.get("correction_text") or "").strip()
+        if not text:
+            return Response(
+                {"detail": "correction_text is required"},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+        snapshot = request.data.get("ai_proposal_snapshot") or {}
+        if not isinstance(snapshot, dict):
+            return Response(
+                {"detail": "ai_proposal_snapshot must be an object"},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+        error_types = request.data.get("error_types") or []
+        if not isinstance(error_types, list) or not all(
+            isinstance(t, str) for t in error_types
+        ):
+            return Response(
+                {"detail": "error_types must be a list of strings"},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+        make_reusable = bool(request.data.get("make_reusable_rule", False))
+        future_instruction = (
+            request.data.get("future_rule_instruction") or ""
+        ).strip()
+        if make_reusable and not future_instruction:
+            return Response(
+                {"detail":
+                    "future_rule_instruction is required when "
+                    "make_reusable_rule is true."},
+                status=http.HTTP_400_BAD_REQUEST,
+            )
+
+        # Optional vendor + ai-extracted vendor name — manual JEs may
+        # have none; AI-receipt-imported JEs typically carry both.
+        ai_vendor_name = (request.data.get("ai_vendor_name") or "").strip()
+        vendor = None
+        vendor_code = (request.data.get("vendor_code") or "").strip()
+        if vendor_code:
+            vendor = Vendor.objects.filter(
+                organization=entry.organization, code=vendor_code,
+            ).first()
+
+        correction = JECorrection.objects.create(
+            journal_entry=entry,
+            organization=entry.organization,
+            vendor=vendor,
+            ai_vendor_name=ai_vendor_name,
+            correction_text=text,
+            error_types=error_types,
+            make_reusable_rule=make_reusable,
+            future_rule_instruction=future_instruction,
+            ai_proposal_snapshot=snapshot,
+            created_by=request.user if request.user.is_authenticated else None,
+        )
+
+        # Promote opt-in corrections into a LearningRule, mirroring the
+        # Bills path. Vendor-scoped only — without a Vendor record, the
+        # rule has no anchor to retrieve against later. The JECorrection
+        # itself is still saved as the audit row either way.
+        if make_reusable and vendor:
+            from django.utils import timezone
+            primary_type = error_types[0] if error_types else ""
+            LearningRule.objects.create(
+                organization=entry.organization,
+                vendor=vendor,
+                entity=entry.entity,
+                customer_number="",
+                invoice_pattern="",
+                trigger_conditions={
+                    "vendor_id": vendor.id,
+                    "vendor_code": vendor.code,
+                    "entity_id": entry.entity_id,
+                    "entity_code": entry.entity.code,
+                    "source": "je_correction",
+                },
+                correction_type=primary_type,
+                human_instruction=future_instruction,
+                structured_accounting_logic={},
+                scope=LearningRule.SCOPE_VENDOR,
+                confidence_policy=LearningRule.POLICY_REQUIRE_REVIEW,
+                created_from_invoice=None,
+                created_from_correction=None,
+                approved_by=request.user if request.user.is_authenticated else None,
+                approved_at=timezone.now(),
+                is_active=True,
+            )
+
+        return Response(
+            JECorrectionSerializer(correction).data,
+            status=http.HTTP_201_CREATED,
+        )
+
 
 # ── Source-document attachments on a JE ─────────────────────────────────────
 # Two views — one nested under a JE for list+upload, one top-level for
@@ -2545,8 +3212,28 @@ class InvoiceDocumentListView(APIView):
 class SourceDocumentDetailView(APIView):
     """DELETE soft-deletes the attachment (blocked on posted/reversed JEs).
     GET serves the file bytes — auth + org scope enforced here, never via
-    the raw FileField path."""
+    the raw FileField path.
+
+    Auth via ``Authorization: Bearer …`` header is preferred. ``GET``
+    additionally accepts ``?token=…&org=…`` query params so that
+    ``<iframe>`` / ``<img>`` / ``<object>`` tags can fetch attachments
+    without JS — they can't set custom headers. The token in the URL is
+    the same JWT already in localStorage, so the security surface is
+    unchanged from the header path; only the transport differs."""
     permission_classes = [IsAuthenticated, IsOrganizationMember]
+
+    def initialize_request(self, request, *args, **kwargs):
+        # Promote ?token / ?org from the query string into the headers
+        # DRF's auth + tenant resolver expect, but only for safe (GET)
+        # requests so DELETE still requires the explicit header form.
+        if request.method == "GET":
+            token = request.GET.get("token")
+            if token and "HTTP_AUTHORIZATION" not in request.META:
+                request.META["HTTP_AUTHORIZATION"] = f"Bearer {token}"
+            org = request.GET.get("org")
+            if org and "HTTP_X_ORGANIZATION_ID" not in request.META:
+                request.META["HTTP_X_ORGANIZATION_ID"] = org
+        return super().initialize_request(request, *args, **kwargs)
 
     def _resolve_doc(self, request, pk):
         from beakon_core.models.documents import SourceDocument
@@ -2566,8 +3253,10 @@ class SourceDocumentDetailView(APIView):
             return None
 
     def get(self, request, pk):
-        # Support download via /documents/{id}/?download=1 OR a separate
-        # /documents/{id}/download/ route. We only register the first below.
+        # Default response is an attachment download. Pass ?inline=1 to render
+        # PDFs / images in-browser — the review UI embeds them next to the
+        # rationale textbox so reviewers can cross-check the extracted data
+        # against the original source.
         doc = self._resolve_doc(request, pk)
         if doc is None:
             return Response(status=http.HTTP_404_NOT_FOUND)
@@ -2579,12 +3268,32 @@ class SourceDocumentDetailView(APIView):
         except FileNotFoundError:
             return Response({"detail": "file missing on disk"},
                             status=http.HTTP_410_GONE)
-        return FileResponse(
+        inline = request.query_params.get("inline") in ("1", "true", "yes")
+        # Stored content_type is sometimes application/octet-stream — the
+        # browser didn't sniff the file at upload time. Browsers won't
+        # render unknown-typed blobs inline, so we sniff the magic bytes
+        # here and serve the correct MIME so old rows render in the
+        # cross-check pane without a re-upload.
+        served_type = _sniff_content_type(
+            fh, doc.content_type, doc.original_filename,
+        )
+        resp = FileResponse(
             fh,
-            content_type=doc.content_type or "application/octet-stream",
-            as_attachment=True,
+            content_type=served_type,
+            as_attachment=not inline,
             filename=doc.original_filename,
         )
+        # Defeat any cached attachment-disposition response from earlier
+        # sessions — without no-store, refreshing the page can hand the
+        # iframe an old "Content-Disposition: attachment" body that the
+        # browser saves to disk instead of previewing.
+        resp["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        # Some browsers (notably Edge with "open PDFs externally" set)
+        # treat <object>/<embed> PDFs as downloads. X-Content-Type-Options
+        # nosniff + an explicit inline disposition keeps the rendering
+        # path consistent across viewers.
+        resp["X-Content-Type-Options"] = "nosniff"
+        return resp
 
     def delete(self, request, pk):
         doc = self._resolve_doc(request, pk)

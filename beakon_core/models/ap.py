@@ -114,6 +114,13 @@ class Bill(models.Model):
     )
     notes = models.TextField(blank=True)
 
+    # ── B6: which LearningRules the AI followed when prefilling this
+    # draft. Used by the feedback loop — success_count goes up when this
+    # bill is approved, override_count goes up if the reviewer files a
+    # BillCorrection. Empty list when the bill was created manually or
+    # when no rules applied.
+    ai_applied_rule_ids = models.JSONField(default=list, blank=True)
+
     # ── Accrual JE linkage (DR Expense / CR AP on approval) ──────────
     accrual_journal_entry = models.ForeignKey(
         "beakon_core.JournalEntry", on_delete=models.SET_NULL,
@@ -231,3 +238,90 @@ class BillLine(models.Model):
 
     def __str__(self):
         return f"{self.bill.reference}#{self.line_order}: {self.expense_account.code} {self.amount}"
+
+
+class BillCorrection(models.Model):
+    """User-written note telling Beakon what the AI got wrong on a bill.
+
+    Thomas's 2026-05-12 directive: when the AI proposes a JE that's not
+    quite right, the reviewer writes the rationale here ("VAT here is
+    non-recoverable", "this is rent not opex", "split across 6 months").
+    Phase A captures the note + a snapshot of what the AI originally
+    proposed. Phase B retrieves the latest corrections for a vendor and
+    injects them into the next OCR extraction prompt so Beakon learns.
+
+    One row per save event — we keep history so the future learning loop
+    can query "all corrections from this org for this vendor over time".
+
+    Vendor is denormalised off the bill at write time so Phase B can
+    range-scan by vendor without joining through Bill (and so the
+    correction stays attached to a vendor even if the bill is later
+    cancelled).
+    """
+
+    bill = models.ForeignKey(
+        Bill, on_delete=models.CASCADE, related_name="corrections",
+    )
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE,
+        related_name="bill_corrections",
+    )
+    vendor = models.ForeignKey(
+        "beakon_core.Vendor", on_delete=models.PROTECT,
+        related_name="bill_corrections",
+        help_text="Denormalised from bill.vendor for fast retrieval at "
+                  "extraction time.",
+    )
+    # Plain-English explanation of the correction (always saved).
+    correction_text = models.TextField(
+        help_text="Plain-language description of what the AI got wrong "
+                  "on this draft. Always required.",
+    )
+    # Structured labels per Thomas's 2026-05-12 spec §3: lets the future
+    # learning loop classify what kind of mistake it was. Stored as an
+    # array of canonical keys (wrong_account, wrong_amount, duplicate_line,
+    # vat_treatment_wrong, missing_allocation, wrong_entity, wrong_vendor,
+    # wrong_description, other). Free-form so the UI taxonomy can evolve
+    # without a migration.
+    error_types = models.JSONField(
+        default=list, blank=True,
+        help_text="List of structured error-type keys the user checked.",
+    )
+    # Thomas §3 step 5: a correction may be one-off OR become a reusable
+    # rule. This flag captures the user's scope choice; when True, B3's
+    # LearningRule promotion logic will create a rule from this row.
+    make_reusable_rule = models.BooleanField(
+        default=False,
+        help_text="True = user opted to remember this for future invoices.",
+    )
+    # When make_reusable_rule is True, this is the plain-English rule
+    # instruction (different from correction_text — describes how Beakon
+    # should handle SIMILAR invoices, not what was wrong with this one).
+    future_rule_instruction = models.TextField(
+        blank=True,
+        help_text="Plain-English instruction for future similar invoices. "
+                  "Empty for one-off corrections.",
+    )
+    ai_proposal_snapshot = models.JSONField(
+        default=dict, blank=True,
+        help_text="Snapshot of the AI's proposed JE / extraction at the "
+                  "moment the correction was written. Lets later UIs show "
+                  "'AI proposed X, you corrected to Y'.",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="bill_corrections_made",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "beakon_billcorrection"
+        ordering = ["-created_at"]
+        indexes = [
+            # Phase B's hot path: latest corrections per (org, vendor).
+            models.Index(fields=["organization", "vendor", "-created_at"]),
+            models.Index(fields=["bill"]),
+        ]
+
+    def __str__(self):
+        return f"Correction on {self.bill.reference} by {self.created_by_id or '—'}"

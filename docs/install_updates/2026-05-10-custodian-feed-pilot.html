@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Beakon — 2026 05 10 Custodian Feed Pilot</title>
+<style>
+        :root { color-scheme: light; }
+        * { box-sizing: border-box; }
+        body { font: 13px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+               color: #1f2937; background: #fff; max-width: 1080px;
+               margin: 28px auto; padding: 0 24px; }
+        h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
+        h2 { font-size: 20px; margin: 32px 0 12px;
+             padding-bottom: 6px; border-bottom: 2px solid #0f172a;
+             color: #0f172a; }
+        h3 { font-size: 15px; margin: 22px 0 6px; color: #1d4ed8; }
+        h4 { font-size: 13px; margin: 16px 0 4px; color: #334155;
+             text-transform: uppercase; letter-spacing: 0.04em; }
+        p  { margin: 6px 0; }
+        ul { margin: 4px 0; padding-left: 22px; }
+        li { margin: 2px 0; }
+        blockquote { margin: 8px 0; padding: 8px 14px;
+                     background: #f0f9ff; border-left: 3px solid #0ea5e9;
+                     color: #0c4a6e; font-style: italic; font-size: 12.5px; }
+        code { font: 12px ui-monospace, "SF Mono", "Cascadia Code", monospace;
+               background: #f1f5f9; padding: 1px 6px; border-radius: 4px;
+               color: #0f172a; }
+        pre { background: #0f172a; color: #f8fafc; padding: 12px 16px;
+              border-radius: 6px; overflow-x: auto; font-size: 12px;
+              line-height: 1.45; }
+        pre code { background: transparent; padding: 0; color: inherit; }
+        h3 code { background: transparent; padding: 0; color: #1d4ed8;
+                  font-weight: 600; }
+        table { border-collapse: collapse; width: 100%; margin: 8px 0 18px;
+                font-size: 12.5px; }
+        th, td { border: 1px solid #e5e7eb; padding: 6px 9px; text-align: left;
+                 vertical-align: top; }
+        th { background: #f8fafc; font-weight: 600; color: #334155;
+             font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+        td code { font-size: 11.5px; }
+        hr { border: 0; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+        em { color: #6366f1; font-style: italic; }
+        strong { color: #0f172a; }
+
+        @media print {
+          body { margin: 0; padding: 12mm 14mm; max-width: none; }
+          h2 { break-before: auto; break-after: avoid; }
+          h3, h4 { break-after: avoid; }
+          table, pre, blockquote { break-inside: avoid; }
+          tr { break-inside: avoid; }
+          a { color: inherit; text-decoration: none; }
+        }
+    </style>
+</head>
+<body>
+<h1>Custodian Statements pilot — Avaloq daily-statement ingestion</h1>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Date</td><td>2026-05-10</td></tr>
+    <tr><td>Component</td><td>Banking / Custodian feed</td></tr>
+    <tr><td>Author</td><td>Monirul</td></tr>
+    <tr><td>Status</td><td>Installed (demo-only) — pilot wiring against mock files</td></tr>
+    <tr><td>Reversible</td><td>Yes — ingested rows are scoped via <code>AvaloqFeedDrop</code>; deleting the drop cascades. New models can be reverted by dropping migrations 0044 / 0003.</td></tr>
+  </tbody></table>
+<hr>
+<h2>1. What this is</h2>
+<p>Beakon now ingests a <strong>daily SFTP zip from a custodian</strong> (Geneva Avaloq pilot). One zip contains five files — cash, securities, positions, performance, open orders — and lands as a single `<code>AvaloqFeedDrop</code>` audit row. Each file is parsed into the right domain table; positions are reconciled against Beakon's running TaxLot view and disagreements raise a `<code>ReconciliationBreak</code>` for review.</p>
+<p>There is a new dashboard page (<strong>Custodian Statements</strong>) that walks the user from "statement received" → "statement contents" → "reconciliation differences" without leaving the screen. For Monday's demo, a <strong>Receive sample statement</strong> button brings in a mock daily package locally — when real bank samples arrive, the same flow picks them up unchanged.</p>
+<h2>2. Why we built it</h2>
+<p>The first private clients Beakon will onboard hold investments at a Geneva-based Avaloq private bank. The bank will push files to our SFTP endpoint daily — see the integration spec at `<code>docs/integrations/2026-05-10-geneva-bank-avaloq-sftp.md</code>`.</p>
+<p>Building the pipeline now (against mock files) lets us:</p>
+<ul><li>Show Thomas a working demo on Monday.</li><li>De-risk the architecture before the bank's IT call so we go in with</li></ul>
+<p>concrete questions instead of a blank slate.</p>
+<ul><li>Isolate format-specific work behind per-file parsers — when real</li></ul>
+<p>Avaloq samples arrive only the column-mappers change.</p>
+<h2>3. What's installed (technical)</h2>
+<h3>Models / migrations</h3>
+<ul><li><strong>beakon_banking</strong> (migration <code>0003_alter_feedimport_source_avaloqfeeddrop_and_more</code>):</li><li><code>AvaloqFeedDrop</code> — one row per daily zip; idempotent on</li></ul>
+<p><code>(organization, sha256, business_date)</code>.</p>
+<ul><li><code>ReconciliationBreak</code> — discrepancies between bank truth and</li></ul>
+<p>Beakon's ledger.</p>
+<ul><li>Added <code>avaloq_sftp</code> to <code>FeedImport.source</code> choices.</li><li><strong>beakon_core</strong> (migration <code>0044_openorder_performancesnapshot_portfoliotrade_and_more</code>):</li><li><code>PortfolioTrade</code> ← XXX_securities</li><li><code>PositionSnapshot</code> ← XXX_positions</li><li><code>PerformanceSnapshot</code> ← XXX_perf</li><li><code>OpenOrder</code> ← XXX_orderbook</li></ul>
+<h3>Service</h3>
+<ul><li><code>beakon_banking/services/avaloq_feed.py</code></li><li><code>AvaloqFeedService.scan(incoming_dir)</code> — list new zips.</li><li><code>AvaloqFeedService.ingest(zip, organization, custodian, user)</code> —</li></ul>
+<p>extract, dispatch, parse, reconcile. Idempotent.</p>
+<ul><li>Per-file parsers (<code>_parse_cash</code>, <code>_parse_securities</code>,</li></ul>
+<p><code>_parse_positions</code>, <code>_parse_performance</code>, <code>_parse_orderbook</code>) — the only part that changes when real samples arrive.</p>
+<ul><li><code>_reconcile_positions(drop, portfolio, organization)</code> — bank</li></ul>
+<p>snapshot vs. open TaxLot quantities.</p>
+<h3>Management commands</h3>
+<ul><li><code>manage.py drop_mock_avaloq [--portfolio X] [--business-date Y]</code> —</li></ul>
+<p>demo only; generates a mock zip into <code>AVALOQ_INCOMING_DIR</code>.</p>
+<ul><li><code>manage.py ingest_avaloq [--organization N] [--custodian X] [--zip path]</code> —</li></ul>
+<p>sweep + process; idempotent.</p>
+<ul><li><code>manage.py seed_avaloq_demo</code> — idempotent demo data: entity,</li></ul>
+<p>cash accounts, three bank accounts (USD/CHF/EUR), portfolio <code>BEAKON-DEMO-001</code>, five TaxLot rows wired to surface exactly two reconciliation breaks (ROCHE in TaxLot but missing from positions; NESTLE in positions but no TaxLot).</p>
+<h3>API</h3>
+<p>All under <code>/api/v1/beakon/bank-feed/</code>:</p>
+<table>
+  <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td>POST</td><td><code>simulate-push/</code></td><td>Demo: drop a mock zip into the incoming dir. Body: <code>{"portfolio": "BEAKON-DEMO-001", "business_date": "2026-05-10"}</code> (both optional).</td></tr>
+    <tr><td>POST</td><td><code>ingest/</code></td><td>Sweep incoming and process. Body: <code>{"custodian": "CUST_LOMBARD_GVA"}</code> (optional).</td></tr>
+    <tr><td>GET</td><td><code>drops/</code></td><td>List recent drops.</td></tr>
+    <tr><td>GET</td><td><code>drops/&lt;id&gt;/</code></td><td>Detail: counts + breaks + sample rows of each file type.</td></tr>
+    <tr><td>GET</td><td><code>breaks/?resolved=false</code></td><td>Reconciliation break list (open by default).</td></tr>
+  </tbody></table>
+<h3>Frontend</h3>
+<ul><li>New page: <code>/dashboard/bank-feed/</code></li><li>"Simulate Avaloq push" + "Ingest now" buttons.</li><li>Stats: zips ingested, rows imported, open breaks, last ingest.</li><li>Drops table with file-type chips and per-drop break count.</li><li>Open-breaks list with bank-vs-Beakon comparison.</li><li>Drill-down drawer: per-drop sample rows of cash, trades,</li></ul>
+<p>positions, performance, orderbook.</p>
+<ul><li>Sidebar: new "Custodian Feed" entry under <strong>Money</strong>.</li></ul>
+<h3>Settings / env vars</h3>
+<ul><li><code>AVALOQ_INCOMING_DIR</code> (default</li></ul>
+<p><code>&lt;BASE_DIR&gt;/incoming/avaloq/</code>) — where the SFTP daemon lands custodian zips. Override in production to the chrooted SFTP user's home.</p>
+<h2>4. What the admin needs to do</h2>
+<pre><code class="lang-powershell"># 1. Pull and install
+git pull
+python manage.py migrate
+
+# 2. Seed the demo data (idempotent — safe to re-run)
+python manage.py seed_avaloq_demo
+
+# 3. Smoke test on the CLI
+python manage.py drop_mock_avaloq --portfolio BEAKON-DEMO-001
+python manage.py ingest_avaloq --custodian CUST_LOMBARD_GVA
+# Expect: cash 10, securities 4, orderbook 3, positions 5, perf 4
+#         + 2 reconciliation breaks (ROCHE / NESTLE)
+
+# 4. Start the dev servers (if not already running)
+python manage.py runserver 0.0.0.0:8000
+# In another terminal
+cd frontend ; npm run dev</code></pre>
+<p>Open <http://localhost:3000/dashboard/bank-feed/> and click <strong>Simulate Avaloq push</strong> → <strong>Ingest now</strong> → drill into the drop.</p>
+<p>For production scheduling once the real bank pushes are live:</p>
+<pre><code class="lang-text"># Linux cron — every 15 min between 06:00 and 09:00 CET, Mon–Fri
+*/15 6-9 * * 1-5  cd /app &amp;&amp; python manage.py ingest_avaloq
+
+# Windows Task Scheduler equivalent
+schtasks /Create /SC DAILY /TN "Beakon Avaloq Sweep" /ST 06:00 ^
+  /RI 15 /DU 03:00 ^
+  /TR "powershell -Command \"cd D:\bookkeeper; python manage.py ingest_avaloq\""</code></pre>
+<h2>5. How to use it</h2>
+<ul><li><strong>UI:</strong> Dashboard → <strong>Custodian Statements</strong>.</li></ul>
+<p>1. <strong>Receive sample statement</strong> brings in a mock daily statement. 2. <strong>Post statement</strong> records it in the ledger and reconciles holdings against your books. 3. The "Statements received" table shows section chips with line-item counts; click any row for the statement drawer. 4. The "Reconciliation differences" section shows per-custodian-vs-per-ledger comparisons line-by-line.</p>
+<ul><li><strong>CLI:</strong> see step 3 above.</li><li><strong>API:</strong> see endpoint table in section 3.</li></ul>
+<h2>6. What runs automatically</h2>
+<p>Nothing yet — the sweep is manual until the real SFTP feed is live. Once the bank's IT call is done and we have sample files + a real custodian SFTP push, schedule the sweep via cron or Task Scheduler (see section 4).</p>
+<h2>7. Verifying it works</h2>
+<p>After running the seed + the smoke test in section 4, in the Django shell:</p>
+<pre><code class="lang-python">from beakon_banking.models import AvaloqFeedDrop, ReconciliationBreak
+from beakon_core.models import PositionSnapshot, PortfolioTrade
+
+drop = AvaloqFeedDrop.objects.first()
+assert drop.status == "ingested"
+assert drop.file_counts == {
+    "cash": 10, "securities": 4, "orderbook": 3,
+    "positions": 5, "perf": 4,
+}
+
+breaks = ReconciliationBreak.objects.filter(drop=drop)
+assert breaks.count() == 2
+assert {b.isin for b in breaks} == {"CH0012032048", "CH0038863350"}</code></pre>
+<p>The dashboard page shows the same three counts (zips ingested, rows imported, open breaks) at the top.</p>
+<h2>8. Rolling back</h2>
+<p>In order of severity:</p>
+<ul><li><strong>Hide the page:</strong> comment out the "Custodian Feed" item in</li></ul>
+<p><code>frontend/src/components/sidebar-nav.ts</code>.</p>
+<ul><li><strong>Stop ingestion:</strong> disable any cron / Task Scheduler entry. The</li></ul>
+<p>incoming directory will simply accumulate zips.</p>
+<ul><li><strong>Wipe ingested data</strong> (drops cascade-delete child rows):</li></ul>
+<pre><code class="lang-python">  from beakon_banking.models import AvaloqFeedDrop
+  AvaloqFeedDrop.objects.all().delete()</code></pre>
+<ul><li><strong>Revert the schema:</strong></li></ul>
+<pre><code class="lang-powershell">  python manage.py migrate beakon_core 0043
+  python manage.py migrate beakon_banking 0002</code></pre>
+<h2>9. Known limits</h2>
+<ul><li><strong>Mock files only.</strong> The CSV column shapes are *preliminary* —</li></ul>
+<p>invented in <code>scripts/_generate_mock_avaloq_zip.py</code>. When the bank shares real samples, only the per-file parsers in <code>beakon_banking/services/avaloq_feed.py</code> need to change.</p>
+<ul><li><strong>Cash → BankTransaction needs a BankAccount per currency.</strong> The</li></ul>
+<p>parser writes nothing for currencies with no matching active bank account. The seed creates USD / CHF / EUR; anything else silently skips. *In production, the seed step is replaced by client onboarding.*</p>
+<ul><li><strong>Portfolio resolution by zip prefix only.</strong> The <code>XXX</code> filename</li></ul>
+<p>prefix must equal <code>Portfolio.portfolio_id</code>. Mismatches raise a <code>missing_portfolio</code> break and the rest of the zip is skipped.</p>
+<ul><li><strong>Reconciliation is positions-only today.</strong> Cash and securities</li></ul>
+<p>trades are not reconciled against bank balances yet.</p>
+<ul><li><strong>No SFTP receiver.</strong> The drop directory is local. Real SFTP</li></ul>
+<p>hosting is a separate work item — see the integration spec.</p>
+<h2>10. Files touched</h2>
+<pre><code class="lang-text">beakon_banking/constants.py                       | +Avaloq + break constants
+beakon_banking/models.py                          | +AvaloqFeedDrop, ReconciliationBreak
+beakon_banking/admin.py                           | + admin pages
+beakon_banking/services/avaloq_feed.py            | new (+560)
+beakon_banking/services/__init__.py               | export AvaloqFeedService
+beakon_banking/management/commands/drop_mock_avaloq.py   | new
+beakon_banking/management/commands/ingest_avaloq.py      | new
+beakon_banking/migrations/0003_*.py               | new
+beakon_core/models/__init__.py                    | export portfolio_feed
+beakon_core/models/portfolio_feed.py              | new (+260)
+beakon_core/management/commands/seed_avaloq_demo.py     | new
+beakon_core/migrations/0044_*.py                  | new
+api/views/beakon_bank_feed.py                     | new (+220)
+api/beakon_urls.py                                | +5 routes
+digits_clone/settings.py                          | +AVALOQ_INCOMING_DIR
+scripts/_generate_mock_avaloq_zip.py              | new (+220)
+frontend/src/app/dashboard/bank-feed/page.tsx     | new (+560)
+frontend/src/components/sidebar-nav.ts            | + Custodian Feed nav item
+.gitignore                                        | + /incoming/</code></pre>
+<h2>11. References</h2>
+<ul><li><code>docs/integrations/2026-05-10-geneva-bank-avaloq-sftp.md</code> — the</li></ul>
+<p>pre-build spec (what the bank offers, what we still need from them, kick-off agenda).</p>
+<ul><li><code>docs/install_updates/_TEMPLATE.md</code> — install-update doc format.</li><li>Beakon Architecture (2026-04-30), layer 3 (ingestion) and layer 5</li></ul>
+<p>(multi-dimensional posting).</p>
+</body>
+</html>

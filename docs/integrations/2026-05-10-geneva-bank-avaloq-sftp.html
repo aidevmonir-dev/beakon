@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Beakon — 2026 05 10 Geneva Bank Avaloq Sftp</title>
+<style>
+        :root { color-scheme: light; }
+        * { box-sizing: border-box; }
+        body { font: 13px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+               color: #1f2937; background: #fff; max-width: 1080px;
+               margin: 28px auto; padding: 0 24px; }
+        h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
+        h2 { font-size: 20px; margin: 32px 0 12px;
+             padding-bottom: 6px; border-bottom: 2px solid #0f172a;
+             color: #0f172a; }
+        h3 { font-size: 15px; margin: 22px 0 6px; color: #1d4ed8; }
+        h4 { font-size: 13px; margin: 16px 0 4px; color: #334155;
+             text-transform: uppercase; letter-spacing: 0.04em; }
+        p  { margin: 6px 0; }
+        ul { margin: 4px 0; padding-left: 22px; }
+        li { margin: 2px 0; }
+        blockquote { margin: 8px 0; padding: 8px 14px;
+                     background: #f0f9ff; border-left: 3px solid #0ea5e9;
+                     color: #0c4a6e; font-style: italic; font-size: 12.5px; }
+        code { font: 12px ui-monospace, "SF Mono", "Cascadia Code", monospace;
+               background: #f1f5f9; padding: 1px 6px; border-radius: 4px;
+               color: #0f172a; }
+        pre { background: #0f172a; color: #f8fafc; padding: 12px 16px;
+              border-radius: 6px; overflow-x: auto; font-size: 12px;
+              line-height: 1.45; }
+        pre code { background: transparent; padding: 0; color: inherit; }
+        h3 code { background: transparent; padding: 0; color: #1d4ed8;
+                  font-weight: 600; }
+        table { border-collapse: collapse; width: 100%; margin: 8px 0 18px;
+                font-size: 12.5px; }
+        th, td { border: 1px solid #e5e7eb; padding: 6px 9px; text-align: left;
+                 vertical-align: top; }
+        th { background: #f8fafc; font-weight: 600; color: #334155;
+             font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+        td code { font-size: 11.5px; }
+        hr { border: 0; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+        em { color: #6366f1; font-style: italic; }
+        strong { color: #0f172a; }
+
+        @media print {
+          body { margin: 0; padding: 12mm 14mm; max-width: none; }
+          h2 { break-before: auto; break-after: avoid; }
+          h3, h4 { break-after: avoid; }
+          table, pre, blockquote { break-inside: avoid; }
+          tr { break-inside: avoid; }
+          a { color: inherit; text-decoration: none; }
+        }
+    </style>
+</head>
+<body>
+<h1>Geneva private bank — Avaloq daily SFTP feed</h1>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Date</td><td>2026-05-10</td></tr>
+    <tr><td>Counterparty</td><td>Geneva-based private bank (Avaloq-hosted)</td></tr>
+    <tr><td>Status</td><td><strong>Spec</strong> — awaiting kick-off with bank IT</td></tr>
+    <tr><td>Owner</td><td>Monirul (technical) / Thomas (relationship)</td></tr>
+    <tr><td>Target pilot</td><td>First Beakon private clients with investments at this bank</td></tr>
+  </tbody></table>
+<hr>
+<h2>1. What the bank is offering</h2>
+<p>The bank runs on <strong>Avaloq</strong> (the Swiss banking platform). It can deliver a <strong>daily SFTP push</strong> of five files in a single zip archive to a server we provide.</p>
+<h3>The five files (per zip, daily)</h3>
+<table>
+  <thead><tr><th>File</th><th>French label</th><th>English meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>XXX_cash</code></td><td>Mouvements cash de la veille</td><td>Yesterday's cash movements</td></tr>
+    <tr><td><code>XXX_securities</code></td><td>Mouvements titre de la veille</td><td>Yesterday's securities (trade) movements</td></tr>
+    <tr><td><code>XXX_orderbook</code></td><td>Ordres en cours</td><td>Open orders</td></tr>
+    <tr><td><code>XXX_positions</code></td><td>Détail des positions (niveau container)</td><td>Position snapshot at container level</td></tr>
+    <tr><td><code>XXX_perf</code></td><td>Détail des performances (niveau container)</td><td>Performance snapshot at container level</td></tr>
+  </tbody></table>
+<p><code>XXX</code> is a per-client / per-portfolio prefix — to be confirmed with the bank. "Container" appears to be Avaloq terminology for a portfolio / custody account.</p>
+<h3>Delivery characteristics</h3>
+<ul><li><strong>Direction:</strong> <strong>bank → us</strong> (push). They drop, we receive. No</li></ul>
+<p>outbound API calls from Beakon.</p>
+<ul><li><strong>Protocol:</strong> <strong>SFTP only</strong>. *FTPS is explicitly not accepted.*</li><li><strong>Cadence:</strong> daily, files arrive <strong>before 07:00 CET</strong>. They warn</li></ul>
+<p>some specific days the file generation may be delayed (likely bank holidays / system maintenance).</p>
+<ul><li><strong>Source IPs they will connect from</strong> (firewall allowlist on our</li></ul>
+<p>side):</p>
+<ul><li>VIP: <code>194.38.173.2</code></li><li>Physical 1: <code>194.38.173.1</code></li><li>Physical 2: <code>194.38.173.3</code></li></ul>
+<h2>2. What we have to provide them</h2>
+<p>The screenshot includes a table the bank wants us to fill in. They expect us to host (or commission) the SFTP server.</p>
+<table>
+  <thead><tr><th>Field they need</th><th>Our value (TBD)</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Adresse IP ou nom DNS</td><td><em>to decide</em></td><td>Public DNS preferred over a bare IP for portability</td></tr>
+    <tr><td>Adresse IP back-up (optional)</td><td><em>to decide</em></td><td>If we run HA or a fallback host</td></tr>
+    <tr><td>User</td><td><em>to decide</em></td><td>Suggest <code>avaloq-&lt;bank-code&gt;</code> so per-bank accounts are obvious</td></tr>
+    <tr><td>Mot de passe</td><td><em>separate channel</em></td><td>Bank explicitly says transmit separately. <strong>Strongly prefer SSH key auth — they offer this as an option.</strong></td></tr>
+    <tr><td>Répertoire (directory)</td><td><em>to decide</em></td><td>Suggest <code>/incoming/</code> chrooted to the user's home</td></tr>
+    <tr><td>Port</td><td><code>22</code> (default)</td><td>Confirm if their egress allows non-standard ports</td></tr>
+  </tbody></table>
+<h2>3. What Beakon needs to do</h2>
+<p>Three layers — infra, application, operations.</p>
+<h3>3.1 Infrastructure</h3>
+<p>We need a <strong>publicly reachable SFTP endpoint</strong> locked down to the three bank IPs. Choices:</p>
+<p>1. <strong>Self-hosted on the production server</strong> (Swiss VPS — Hetzner, Infomaniak, Exoscale). Cheapest. We own the firewall, key rotation, audit logs. 2. <strong>Managed SFTP service</strong> (AWS Transfer Family, Azure Blob SFTP). Faster to stand up, but data leaves Switzerland — conflicts with the Swiss-hosted mandate in the architecture document. **Not recommended.** 3. <strong>Dedicated bastion</strong> in front of Beakon's app server. The drop directory is on the bastion; Beakon reads it over an internal network mount.</p>
+<p><strong>Recommendation: option 1</strong>, self-hosted on a small Swiss VPS, with a hardened SSH/SFTP daemon, chrooted per-bank user, IP allowlist, SSH key auth (no passwords), and fail2ban on the public port.</p>
+<p>Operational requirements regardless of host:</p>
+<ul><li><strong>IP allowlist:</strong> only the three bank IPs reach port 22.</li><li><strong>Per-bank user account</strong> with chrooted home and write-only</li></ul>
+<p>permission on <code>/incoming/</code>, read-only elsewhere. Compromise of one bank's credentials cannot leak another's.</p>
+<ul><li><strong>SSH key auth</strong> preferred. The bank screenshot mentions this is</li></ul>
+<p>acceptable to them. Generate a dedicated keypair per bank, hand the public key to their IT.</p>
+<ul><li><strong>Storage:</strong> at least 30 days of raw zips retained for audit and</li></ul>
+<p>re-ingest. Daily file size unknown — assume 1–10 MB until we see real samples.</p>
+<ul><li><strong>Monitoring:</strong> an alert if no zip arrives by 08:00 CET on a</li></ul>
+<p>business day. Late or missing files are a relationship issue worth catching same-day.</p>
+<ul><li><strong>Backup:</strong> zips are accounting source documents — back them up</li></ul>
+<p>to encrypted offsite storage with the same Swiss-residency guarantees.</p>
+<h3>3.2 Application (Beakon code)</h3>
+<p>Today Beakon already has:</p>
+<ul><li><code>FeedImport</code> model (<code>beakon_banking/models.py</code>) — audit row per</li></ul>
+<p>ingestion of a bank feed. Already used by manual statement uploads.</p>
+<ul><li><code>BankTransaction</code> — cash movement rows. Natural target for the</li></ul>
+<p><code>XXX_cash</code> file.</p>
+<ul><li><code>TaxLot</code> — lot-level holdings.</li><li><code>Portfolio</code>, <code>Custodian</code> master tables (added in commit <code>111de0f</code>).</li><li><code>AIBankStatementImportService</code> — Claude-driven extractor for ad-hoc</li></ul>
+<p>uploads. Useful for ad-hoc PDFs but <strong>not</strong> the right path for a structured daily feed where we own the schema.</p>
+<p><strong>What we need to build:</strong></p>
+<table>
+  <thead><tr><th>Piece</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><strong>SFTP watcher</strong></td><td>Scheduled job (every 15 min during business hours) that polls <code>/incoming/</code> for new zips, claims a lock per file, verifies size is stable, and enqueues an ingest task.</td></tr>
+    <tr><td><strong>Ingest task</strong></td><td>Unzip into a temp directory; map each of the 5 files to the right parser; record one <code>FeedImport</code> row per zip with status <code>received → parsed → reconciled / failed</code>.</td></tr>
+    <tr><td><strong>Cash parser</strong></td><td><code>XXX_cash</code> → <code>BankTransaction</code> rows via the existing dedup pipeline (<code>_dedup_key</code>). Already 80% in place.</td></tr>
+    <tr><td><strong>Securities-trade parser</strong></td><td><code>XXX_securities</code> → portfolio trade rows. *New* — we may need a <code>PortfolioTrade</code> model (or extend an existing one) keyed on (portfolio, trade date, ISIN, side).</td></tr>
+    <tr><td><strong>Positions parser</strong></td><td><code>XXX_positions</code> → snapshot table. Use it to <strong>reconcile</strong> Beakon's running TaxLot balance vs. the bank's truth. Disagreements raise a break for review.</td></tr>
+    <tr><td><strong>Performance parser</strong></td><td><code>XXX_perf</code> → performance snapshot table. *New* model — daily P&L per container, basis for portfolio reports.</td></tr>
+    <tr><td><strong>Orderbook parser</strong></td><td><code>XXX_orderbook</code> → open-orders table. *New* model. Lower priority — orderbook is informational, not bookkeeping.</td></tr>
+    <tr><td><strong>Idempotency key</strong></td><td><code>(bank_code, business_date, file_type, sha256(payload))</code>. Re-ingesting the same file is a no-op.</td></tr>
+    <tr><td><strong>UI surface</strong></td><td>Bank-feed status page: last zip received, per-file row counts, parse errors, reconciliation breaks per portfolio.</td></tr>
+  </tbody></table>
+<p><strong>Format question — biggest unknown.</strong> The screenshot does not say whether the files are CSV, fixed-width, XML, or one of Avaloq's proprietary formats (<code>.adv</code> / <code>.txt</code> per Avaloq spec). We <strong>must</strong> get sample files before writing parsers. Avaloq feeds tend to be delimited text with bank-specific column sets, so each bank we onboard needs its own column mapping even if they all run Avaloq.</p>
+<h3>3.3 Operations</h3>
+<ul><li>A runbook for "what to do when the file is late" — escalation</li></ul>
+<p>contact at the bank, retention of the previous day's data, and how Beakon behaves when a day is missing (no auto-fill, mark the day as un-reconciled).</p>
+<ul><li>A re-ingest CLI: <code>manage.py ingest_avaloq_zip &lt;file&gt;</code> for</li></ul>
+<p>same-day re-runs after a bug fix, gated on the idempotency key.</p>
+<ul><li>A second pair of eyes (four-eyes flag is already in the engine)</li></ul>
+<p>before any ingested cash movement posts a journal entry. The feed is <strong>proposal</strong>, not auto-posting, until pilot data proves parser reliability.</p>
+<h2>4. Open questions for the bank's IT call</h2>
+<p>Bring these to the kick-off meeting. Each one blocks a parser.</p>
+<h3>File format and schema</h3>
+<p>1. What format are the five files inside the zip — CSV, fixed-width, XML, JSON, Avaloq native? 2. Can they share a <strong>sample zip</strong> (with anonymised data is fine) so we can develop against real bytes? 3. Schema / column definitions for each file. Is there a published spec, or do they generate per-bank? 4. Encoding (UTF-8, Latin-1, Windows-1252)? 5. Decimal separator (comma or dot)? Date format (DD.MM.YYYY, YYYY-MM-DD)?</p>
+<h3>Identifiers</h3>
+<p>6. What does the <code>XXX</code> prefix represent — bank-side client number, container ID, or our entity code? Will it be stable per portfolio for the lifetime of the relationship? 7. How are securities identified — ISIN, Telekurs Valoren, both? 8. Do containers map 1:1 to portfolios, or can a container hold sub-portfolios?</p>
+<h3>Semantics</h3>
+<p>9. Is <code>XXX_positions</code> a <strong>full snapshot</strong> every day, or <strong>deltas</strong>? 10. Performance — what time period(s) are reported daily? MTD, YTD, inception, custom benchmark? 11. Cash movements — are FX trades reported as one row or as a debit + credit pair? 12. Are corrections / re-broadcasts emitted as a *replacement* file or as an additional row with a reversal sign? 13. How are bank holidays handled — empty file, no file at all, or file with prior business-day data? 14. Time zone of timestamps inside the file (CET assumed, confirm).</p>
+<h3>Operations</h3>
+<p>15. Maximum expected file size and growth profile (capacity planning)? 16. Will we get one feed per portfolio or one consolidated feed per relationship? 17. SLA on file delivery — are they on the hook for being late? 18. What's the change-management process if Avaloq ships a schema change on their side? 19. Can they accept SSH key auth (their note hints yes — confirm)? 20. Do they have a non-prod / UAT endpoint we can test against before going live?</p>
+<h2>5. Decisions for Thomas</h2>
+<p>These are the calls only you can make:</p>
+<ul><li><strong>Where do we host the SFTP endpoint?</strong> (Recommend Swiss self-host.)</li><li><strong>Who pays for it?</strong> Bank fees vs. Beakon-borne infrastructure.</li><li><strong>Pilot scope</strong> — one client / one portfolio first, or all at</li></ul>
+<p>once? Recommend one container, one full month, before broadening.</p>
+<ul><li><strong>Auto-post vs. propose-and-approve</strong> — the engine supports both.</li></ul>
+<p>Recommend propose-and-approve until the parser has been clean for one full month.</p>
+<ul><li><strong>Onboarding playbook</strong> — every new client at this bank requires</li></ul>
+<p>a per-container <code>XXX</code> prefix to be wired in. Who maintains that mapping (Beakon ops or the client)?</p>
+<h2>6. Rough sequencing</h2>
+<p>Phase ordering is dictated by what unblocks the most value with the least guesswork.</p>
+<p>1. <strong>Stand up SFTP infrastructure</strong> (Swiss VPS, hardened, IP allowlisted). Independent of any schema work. 2. <strong>Receive sample files</strong> from the bank. *Everything below is blocked until this happens.* 3. <strong>Cash parser</strong> — leverages existing <code>BankTransaction</code> / <code>FeedImport</code> plumbing. Smallest delta. 4. <strong>Positions parser</strong> — second priority because it's the reconciliation anchor. Even before securities trades are parsed, a daily position snapshot lets us catch drift. 5. <strong>Securities-trade parser</strong> — needed before we can fully automate portfolio bookkeeping. 6. <strong>Performance parser</strong> — feeds the reporting layer; not on the bookkeeping critical path. 7. <strong>Orderbook parser</strong> — last; informational only.</p>
+<p>Each phase produces an entry in <code>docs/install_updates/</code> when it ships.</p>
+<h2>7. Next steps</h2>
+<ul><li>[ ] <strong>This week:</strong> approve hosting choice (Swiss self-host</li></ul>
+<p>recommended) and provision the VPS.</p>
+<ul><li>[ ] <strong>Before the bank IT call:</strong> circulate the open-questions</li></ul>
+<p>list (section 4) so the meeting is efficient.</p>
+<ul><li>[ ] <strong>At the bank IT call:</strong> request sample files, get schema</li></ul>
+<p>docs, confirm SSH-key auth, agree on test/UAT endpoint.</p>
+<ul><li>[ ] <strong>After the call:</strong> convert this Spec into the first</li></ul>
+<p>install-update doc once cash parser is live.</p>
+<h2>8. References</h2>
+<ul><li>Source screenshot from Thomas: Avaloq SFTP setup brief from a</li></ul>
+<p>Geneva private bank (2026-05-10).</p>
+<ul><li>Beakon Architecture (2026-04-30), layer 3: ingestion / external</li></ul>
+<p>data; layer 5: multi-dimensional posting.</p>
+<ul><li><code>beakon_banking/models.py::FeedImport</code> — existing audit primitive.</li><li><code>beakon_banking/services/ai_statement_import.py</code> — ad-hoc</li></ul>
+<p>statement importer (different shape; useful as reference, not the path we'll use here).</p>
+<ul><li><code>beakon_core/models/masters.py::Portfolio</code>, <code>Custodian</code>, <code>TaxLot</code></li></ul>
+<p>— masters this feed will populate / reconcile against.</p>
+</body>
+</html>

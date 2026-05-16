@@ -5,6 +5,11 @@ Kept in a separate module so the legacy ``api/urls.py`` stays readable.
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
+from api.views.platform_admin import (
+    CustomerListView as PlatformCustomerListView,
+    CustomerDetailView as PlatformCustomerDetailView,
+    TrafficView as PlatformTrafficView,
+)
 from api.views.beakon import (
     AccountGroupViewSet,
     AccountSubtypeCatalogView,
@@ -18,6 +23,7 @@ from api.views.beakon import (
     DimensionTypeViewSet,
     DimensionValueViewSet,
     DimensionValidationRuleViewSet,
+    LearningRuleViewSet,
     BankAccountMasterViewSet,
     CounterpartyViewSet,
     CustodianViewSet,
@@ -75,6 +81,9 @@ from api.views.beakon_banking import (
     MLBankCategorizerTrainView,
 )
 from api.views.beakon_dashboard import CashTrendView
+from api.views.beakon_wealth import (
+    WealthPerformanceTrendView, WealthSummaryView,
+)
 from api.views.beakon_bank_feed import (
     AvaloqBreakListView,
     AvaloqCoverageView,
@@ -124,6 +133,7 @@ router.register(r"dimension-types", DimensionTypeViewSet, basename="beakon-dimen
 router.register(r"dimension-values", DimensionValueViewSet, basename="beakon-dimension-value")
 router.register(r"controlled-lists", ControlledListEntryViewSet, basename="beakon-controlled-list")
 router.register(r"dimension-validation-rules", DimensionValidationRuleViewSet, basename="beakon-dimension-rule")
+router.register(r"learning-rules", LearningRuleViewSet, basename="beakon-learning-rule")
 router.register(r"periods", PeriodViewSet, basename="beakon-period")
 router.register(r"intercompany-groups", IntercompanyGroupViewSet, basename="beakon-ic-group")
 router.register(r"vendors", VendorViewSet, basename="beakon-vendor")
@@ -266,12 +276,25 @@ urlpatterns = [
          name="beakon-period-run-closing-entries"),
     # VAT report
     path("reports/vat/", VATReportView.as_view(), name="beakon-vat-report"),
+    # Wealth-management aggregations (Wealth dashboard)
+    path("wealth/summary/", WealthSummaryView.as_view(),
+         name="beakon-wealth-summary"),
+    path("wealth/performance-trend/", WealthPerformanceTrendView.as_view(),
+         name="beakon-wealth-perf-trend"),
     # Workbook → DB implementation evidence
     path("workbook-implementation/", WorkbookImplementationView.as_view(),
          name="beakon-workbook-implementation"),
     # Editable Mermaid workflow diagrams
     path("workflow-diagrams/<str:code>/", WorkflowDiagramView.as_view(),
          name="beakon-workflow-diagram"),
+    # Platform admin — cross-tenant cockpit for Beakon staff (Thomas).
+    # All endpoints are gated by IsAdminUser inside the view classes.
+    path("admin/customers/",            PlatformCustomerListView.as_view(),
+         name="beakon-admin-customers"),
+    path("admin/customers/<slug:slug>/", PlatformCustomerDetailView.as_view(),
+         name="beakon-admin-customer-detail"),
+    path("admin/traffic/",              PlatformTrafficView.as_view(),
+         name="beakon-admin-traffic"),
 ]
 
 urlpatterns += router.urls

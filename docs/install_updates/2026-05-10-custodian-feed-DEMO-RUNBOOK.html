@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Beakon — 2026 05 10 Custodian Feed Demo Runbook</title>
+<style>
+        :root { color-scheme: light; }
+        * { box-sizing: border-box; }
+        body { font: 13px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+               color: #1f2937; background: #fff; max-width: 1080px;
+               margin: 28px auto; padding: 0 24px; }
+        h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
+        h2 { font-size: 20px; margin: 32px 0 12px;
+             padding-bottom: 6px; border-bottom: 2px solid #0f172a;
+             color: #0f172a; }
+        h3 { font-size: 15px; margin: 22px 0 6px; color: #1d4ed8; }
+        h4 { font-size: 13px; margin: 16px 0 4px; color: #334155;
+             text-transform: uppercase; letter-spacing: 0.04em; }
+        p  { margin: 6px 0; }
+        ul { margin: 4px 0; padding-left: 22px; }
+        li { margin: 2px 0; }
+        blockquote { margin: 8px 0; padding: 8px 14px;
+                     background: #f0f9ff; border-left: 3px solid #0ea5e9;
+                     color: #0c4a6e; font-style: italic; font-size: 12.5px; }
+        code { font: 12px ui-monospace, "SF Mono", "Cascadia Code", monospace;
+               background: #f1f5f9; padding: 1px 6px; border-radius: 4px;
+               color: #0f172a; }
+        pre { background: #0f172a; color: #f8fafc; padding: 12px 16px;
+              border-radius: 6px; overflow-x: auto; font-size: 12px;
+              line-height: 1.45; }
+        pre code { background: transparent; padding: 0; color: inherit; }
+        h3 code { background: transparent; padding: 0; color: #1d4ed8;
+                  font-weight: 600; }
+        table { border-collapse: collapse; width: 100%; margin: 8px 0 18px;
+                font-size: 12.5px; }
+        th, td { border: 1px solid #e5e7eb; padding: 6px 9px; text-align: left;
+                 vertical-align: top; }
+        th { background: #f8fafc; font-weight: 600; color: #334155;
+             font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+        td code { font-size: 11.5px; }
+        hr { border: 0; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+        em { color: #6366f1; font-style: italic; }
+        strong { color: #0f172a; }
+
+        @media print {
+          body { margin: 0; padding: 12mm 14mm; max-width: none; }
+          h2 { break-before: auto; break-after: avoid; }
+          h3, h4 { break-after: avoid; }
+          table, pre, blockquote { break-inside: avoid; }
+          tr { break-inside: avoid; }
+          a { color: inherit; text-decoration: none; }
+        }
+    </style>
+</head>
+<body>
+<h1>Monday demo runbook — Custodian Statements (Avaloq SFTP pilot, v2)</h1>
+<blockquote><strong>v2 update</strong>: page redesigned to a daily reconciliation control room.<br>Now has an environment strip, SLA + coverage strip, action queue,<br>14-day arrival heatmap, filter rail, categorised reconciliation<br>differences (timing / FX / missing trade / corp action / true error /<br>unknown), and a tabbed statement drawer with Provenance, Audit, and<br>Re-process. The two-step walkthrough card is now a *first-run* card —<br>it disappears the moment you have a posted statement.</blockquote>
+<p><strong>Audience:</strong> Thomas (and anyone else in the meeting). <strong>Time budget:</strong> 5 minutes live click-through. Read the storyline below once before the meeting; then drive it from the dashboard.</p>
+<hr>
+<h2>Pre-flight (do this 10 minutes before)</h2>
+<pre><code class="lang-powershell"># 1. Make sure both servers are up
+python manage.py runserver 0.0.0.0:8000
+# (in another terminal)
+cd frontend ; npm run dev
+
+# 2. Reset to a clean demo state — wipes any prior statements so the
+#    counts on screen start at zero.
+python manage.py shell -c "from beakon_banking.models import AvaloqFeedDrop; AvaloqFeedDrop.objects.all().delete()"
+
+# 3. Make sure seed data is in place (idempotent)
+python manage.py seed_avaloq_demo
+
+# 4. Open the page so it's already loaded
+#    http://localhost:3000/dashboard/bank-feed/</code></pre>
+<p>If you also want CLI evidence beside the browser, keep a Python shell open at:</p>
+<pre><code class="lang-python">from beakon_banking.models import AvaloqFeedDrop, ReconciliationBreak</code></pre>
+<hr>
+<h2>The storyline (5 minutes)</h2>
+<h3>Beat 1 — set the stage (30 seconds)</h3>
+<blockquote>"Thomas, you sent me the screenshot last week from the Geneva bank<br>on Avaloq. They send us a daily statement package — five sections:<br>cash movements, trade confirmations, holdings, performance, and<br>pending orders. I want to show you the whole flow working — receive<br>the statement, post it to the ledger, reconcile holdings — against<br>mock data we generate ourselves. When the real samples arrive after<br>your IT call, the only thing that changes is how each section is<br>read; the rest of what you'll see tonight is what production looks<br>like."</blockquote>
+<p>Open <code>/dashboard/bank-feed/</code> (Custodian Statements). The two-step walkthrough card is visible.</p>
+<h3>Beat 2 — receive the statement (30 seconds)</h3>
+<p>Click <strong>Receive sample statement</strong>.</p>
+<blockquote>"In production this is the bank's overnight SFTP push. Here we<br>bring it in locally — but the receiving folder, the file naming,<br>the contents, all match what the bank will send."</blockquote>
+<p>Banner: *"Sample statement received — Portfolio BEAKON-DEMO-001 · business date 2026-05-10 · 1.9 KB."*</p>
+<h3>Beat 3 — post to the ledger (60 seconds)</h3>
+<p>Click <strong>Post statement</strong>.</p>
+<p>Wait ~1 second. Banner switches to:</p>
+<blockquote>*"Posted 1 statement to the ledger — Cash movements: 10 · Trade<br>confirmations: 4 · Pending orders: 3 · Holdings: 5 · Performance: 4<br>— 2 reconciliation differences"*</blockquote>
+<p>Stats strip updates: <strong>1 statement posted</strong>, <strong>26 line items posted</strong>, <strong>2 open differences</strong>, last posting "Posted".</p>
+<blockquote>"All five sections of the statement are read in one transaction.<br>The cash movements land in our bank-feed table through the same<br>dedup logic the manual statement upload uses, so re-posting the<br>same day's statement writes nothing twice. The trade confirmations,<br>holdings, performance, and pending orders each land in their own<br>portfolio-side records."</blockquote>
+<h3>Beat 4 — open the statement (60 seconds)</h3>
+<p>Click the row in the <strong>Statements</strong> table.</p>
+<p>The statement drawer slides in with seven tabs: <strong>Overview · Cash · Trades · Holdings · Performance · Orders · Audit</strong>.</p>
+<blockquote>"The Overview tab gives me everything I need at a glance:<br>per-section line counts, *Provenance* showing the source IP — green<br>dot, allowlisted; the SHA-256 hash of the file so we can prove<br>integrity; the schema version we detected. Differences scoped to<br>this statement at the bottom. The other tabs let me browse the<br>actual data."</blockquote>
+<p>Click each tab briefly. Land on <strong>Audit</strong> last:</p>
+<blockquote>"Every step is timestamped — received at 08:47 CET, posting started,<br>posted to ledger, reconciliation completed. This is the audit<br>trail FINMA will ask for."</blockquote>
+<p>Close the drawer.</p>
+<h3>Beat 5 — the reconciliation story (90 seconds)</h3>
+<p>Scroll to <strong>Reconciliation differences</strong>.</p>
+<blockquote>"Here's the real value. The bank's holdings statement is<br>authoritative. We reconcile it against the ledger line-by-line.<br>The system found two differences today — and it told me *why*."</blockquote>
+<p>Point at the <strong>category chips</strong> at the top:</p>
+<blockquote>"Two differences, two categories. <strong>True error</strong> is one — that's<br>a real discrepancy that needs a human. <strong>Missing trade</strong> is one —<br>we never booked a position the bank says we own."</blockquote>
+<p>Point at the first difference (True error · Roche):</p>
+<blockquote><strong>CH0012032048 — Quantity mismatch (True error).</strong><br>*"Per custodian: 0 shares. Per ledger: 100 shares. Suggested next<br>step: 'Recent trade history exists for this ISIN but does not<br>mathematically explain the difference — investigate.'"*</blockquote>
+<blockquote>"The engine looked at our trade history, saw a buy, did the math,<br>and said: this doesn't add up. So it's flagging it for me to<br>investigate rather than letting me believe it'll self-resolve."</blockquote>
+<p>Point at the second difference (Missing trade · Nestlé):</p>
+<blockquote><strong>CH0038863350 — Unrecognised security (Missing trade).</strong><br>*"Per custodian: 80 shares. Per ledger: 0. Suggested next step:<br>'No trade on file for CH0038863350. Either book the missing buy<br>or ask the custodian why this position appears on the statement.'"*</blockquote>
+<blockquote>"Same idea, opposite direction. The bank says we own Nestlé; the<br>ledger has no record. Engine recognises this as a *missing trade*,<br>not a corporate action, because there's no recent trade history<br>for this ISIN at all."</blockquote>
+<h3>Beat 6 — what's next (60 seconds)</h3>
+<p>Close the drawer.</p>
+<blockquote>"Three things to flag for your IT call with the bank:</blockquote>
+<p>></p>
+<blockquote>1. <strong>Statement format.</strong> What we built today assumes a structured<br>   layout with the columns I made up. We need their actual sample<br>   statements. Once we have them, the readers swap one-for-one.<br>2. <strong>SFTP hosting.</strong> This is running off a local folder. Real<br>   SFTP needs a Swiss server, three IP allowlists, and SSH key<br>   auth — that's the spec doc I sent you Saturday.<br>3. <strong>Per-portfolio prefix.</strong> The statement file name starts with<br>   a portfolio code. We need to confirm with them what that code<br>   actually represents and that it stays stable per relationship."</blockquote>
+<blockquote>"Once we have samples, I estimate three weeks of work to swap the<br>readers, stand up the SFTP receiver, schedule the daily posting,<br>and pilot it on one client. End-to-end the rest is already done<br>— what you're seeing today."</blockquote>
+<hr>
+<h2>If something goes wrong on stage</h2>
+<table>
+  <thead><tr><th>Symptom</th><th>Recovery</th></tr></thead>
+  <tbody>
+    <tr><td>Page blank / 401</td><td>You're not logged in. Log in at <code>/login</code>.</td></tr>
+    <tr><td>"Receive sample statement" returns 500</td><td>The receiving folder wasn't created. Run <code>python manage.py drop_mock_avaloq</code> from the CLI once — it creates the folder.</td></tr>
+    <tr><td>"Post statement" returns "No statements pending"</td><td>Click "Receive sample statement" first, *then* "Post statement".</td></tr>
+    <tr><td>Counts are off (not 10/4/3/5/4)</td><td>Wipe and re-seed: <code>AvaloqFeedDrop.objects.all().delete()</code> then re-run the demo.</td></tr>
+    <tr><td>Differences aren't 2</td><td>The seed data drifted — <code>python manage.py seed_avaloq_demo</code> will not delete TaxLots that already exist with different qty. Run the wipe + seed in pre-flight.</td></tr>
+    <tr><td>Detail drawer empty</td><td>The statement hasn't been posted yet. Click "Post statement" first.</td></tr>
+  </tbody></table>
+<h2>What NOT to claim during the demo</h2>
+<ul><li><strong>"This is talking to the real bank."</strong> It is not. Say "sample</li></ul>
+<p>statement" or "demo statement" each time.</p>
+<ul><li><strong>"This is production-grade."</strong> It's not — we have no SFTP</li></ul>
+<p>receiver, no monitoring, no alerting, no per-bank user accounts.</p>
+<ul><li><strong>"The format matches Avaloq."</strong> We don't know what Avaloq's</li></ul>
+<p>format looks like yet. Ours is plausible but invented.</p>
+<ul><li><strong>"Auto-posts to journal entries."</strong> Cash movements land in the</li></ul>
+<p>bank-feed table; they need a human to categorise + approve before a journal entry posts. This is by design (Thomas's "no auto-post until the readers are reliable for one full month").</p>
+<hr>
+<h2>Closing line</h2>
+<blockquote>"When you have the call with their IT next week, ping me — I'll<br>sit in. The questions in section 4 of the spec doc are designed<br>so we walk out with everything we need."</blockquote>
+</body>
+</html>

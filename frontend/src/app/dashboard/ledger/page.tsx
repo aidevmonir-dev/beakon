@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  Search, X, Command, AlertCircle, BookOpen, Hash,
+  ArrowLeft, Search, X, Command, AlertCircle, BookOpen, Hash,
   Building2, ListTree, Calendar, CheckCircle2,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -192,6 +192,12 @@ export default function LedgerPage() {
 
   return (
     <div>
+      <Link
+        href="/dashboard/accounting"
+        className="inline-flex items-center text-xs text-gray-500 hover:text-gray-800 mb-3"
+      >
+        <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back to Accounting
+      </Link>
       <PageHeader
         title="Ledger"
         description={

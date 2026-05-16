@@ -98,7 +98,7 @@ export default function NewTripClaimPage() {
 
       <div className="mt-2 mb-4">
         <Suspense fallback={<span className="text-sm text-gray-400">Back</span>}>
-          <WorkflowBack fallbackHref="/dashboard/travel" />
+          <WorkflowBack fallbackHref="/dashboard/travel/expenses" />
         </Suspense>
       </div>
 

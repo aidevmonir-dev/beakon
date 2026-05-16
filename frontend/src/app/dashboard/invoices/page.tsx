@@ -6,11 +6,11 @@
  *                             -> rejected -> draft
  *   draft -> cancelled
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  FileOutput, Plus, X, CheckCircle2, XCircle, DollarSign, Ban, Send, RotateCcw,
+  ArrowLeft, FileOutput, Plus, X, CheckCircle2, XCircle, DollarSign, Ban, Send, RotateCcw,
   Sparkles, Upload, Loader2,
 } from "lucide-react";
 import { api, API_BASE } from "@/lib/api";
@@ -71,6 +71,17 @@ function badge(status: string) {
 
 
 export default function InvoicesPage() {
+  // useSearchParams() forces this component into client-side bailout
+  // during static export. Wrapping the inner content in <Suspense>
+  // lets Next.js emit a placeholder for the build.
+  return (
+    <Suspense fallback={<p className="text-sm text-gray-400 py-8 text-center">Loading…</p>}>
+      <InvoicesPageContent />
+    </Suspense>
+  );
+}
+
+function InvoicesPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -131,6 +142,12 @@ export default function InvoicesPage() {
 
   return (
     <div>
+      <Link
+        href="/dashboard/accounting"
+        className="inline-flex items-center text-xs text-gray-500 hover:text-gray-800 mb-3"
+      >
+        <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back to Accounting
+      </Link>
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
@@ -349,6 +366,16 @@ function CreateInvoiceDrawer({
   // invoice attachment. The same row gets stamped with journal_entry_id
   // when the invoice is issued (transfer_invoice_documents_to_je).
   const [aiReceiptFile, setAiReceiptFile] = useState<File | null>(null);
+  // Mirror of the bills drawer: when AI's suggested revenue account didn't
+  // pass server-side CoA validation, surface what AI was thinking inline
+  // beneath the empty line dropdown so the reviewer can pick the closest
+  // valid match.
+  const [aiSuggestedAccount, setAiSuggestedAccount] = useState<
+    | { id: number; code: string | null; name: string | null;
+        on_other_entity: boolean; is_active: boolean | null;
+        reasoning: string }
+    | null
+  >(null);
   const [proposedCustomer, setProposedCustomer] = useState<{
     name: string;
     defaultCurrency: string;
@@ -409,6 +436,19 @@ function CreateInvoiceDrawer({
     setAiWarnings(event.warnings || []);
     setAiSource({ filename: file.name, model: ex.model_used || "unknown" });
     setAiReceiptFile(file);
+    const sai = event.suggested_account_info;
+    if (sai && !event.matched_account_id) {
+      setAiSuggestedAccount({
+        id: sai.id,
+        code: sai.code ?? null,
+        name: sai.name ?? null,
+        on_other_entity: !!sai.on_other_entity,
+        is_active: sai.is_active ?? null,
+        reasoning: sai.reasoning || ex.suggested_account_reasoning || "",
+      });
+    } else {
+      setAiSuggestedAccount(null);
+    }
 
     if (!matchedCustomer && ex.customer_name) {
       setProposedCustomer({
@@ -845,6 +885,7 @@ function CreateInvoiceDrawer({
               {lines.map((l, i) => {
                 const tc = taxCodes.find((t) => String(t.id) === l.tax_code);
                 const lineTax = tc ? (Number(l.amount) || 0) * (Number(tc.rate) / 100) : 0;
+                const showAiHint = !l.revenue_account && aiSuggestedAccount;
                 return (
                   <div key={i} className="grid grid-cols-12 gap-2 items-start">
                     <select className="input col-span-4" value={l.revenue_account}
@@ -870,6 +911,37 @@ function CreateInvoiceDrawer({
                         <option key={t.id} value={t.id}>{t.code} · {t.rate}%</option>
                       ))}
                     </select>
+                    {showAiHint && (
+                      <div className="col-span-12 -mt-1 text-[11px] rounded border border-amber-200 bg-amber-50 px-2 py-1 leading-snug">
+                        <div className="text-amber-900">
+                          <span className="font-semibold">AI suggested:</span>{" "}
+                          {aiSuggestedAccount.code || aiSuggestedAccount.name ? (
+                            <span className="font-mono">
+                              {aiSuggestedAccount.code}
+                              {aiSuggestedAccount.code && aiSuggestedAccount.name && " · "}
+                              {aiSuggestedAccount.name}
+                            </span>
+                          ) : (
+                            <span className="italic">unknown account id #{aiSuggestedAccount.id}</span>
+                          )}
+                          <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-700">
+                            {aiSuggestedAccount.on_other_entity
+                              ? "on a different entity"
+                              : aiSuggestedAccount.is_active === false
+                                ? "inactive"
+                                : "not on this entity's CoA"}
+                          </span>
+                        </div>
+                        {aiSuggestedAccount.reasoning && (
+                          <div className="text-amber-800/80 mt-0.5">
+                            {aiSuggestedAccount.reasoning}
+                          </div>
+                        )}
+                        <div className="text-amber-800/70 mt-0.5">
+                          Pick the closest matching account from the dropdown above.
+                        </div>
+                      </div>
+                    )}
                     {lines.length > 1 && (
                       <button type="button"
                               onClick={() => setLines(lines.filter((_, idx) => idx !== i))}

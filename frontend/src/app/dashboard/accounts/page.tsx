@@ -10,9 +10,10 @@
  *   · Filter chips (scope/type/status) + search + entity filter narrow the view
  *     without mutating data. Summary stats recompute from the visible set.
  */
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BookOpen, Plus, X, Search, ChevronDown, ChevronRight, Building2,
+  ArrowLeft, BookOpen, Plus, X, Search, ChevronDown, ChevronRight, Building2,
   Landmark, Wallet, Scale, TrendingUp, TrendingDown, MoreHorizontal,
   Layers, Globe, Info, Archive, Pencil, AlertCircle, Check,
   ArrowUp, ArrowDown, Command, Sparkles,
@@ -502,6 +503,12 @@ export default function AccountsPage() {
 
   return (
     <div>
+      <Link
+        href="/dashboard/accounting"
+        className="inline-flex items-center text-xs text-gray-500 hover:text-gray-800 mb-3"
+      >
+        <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back to Accounting
+      </Link>
       <PageHeader
         title="Chart of Accounts"
         description="The ledger's spine — every entry in Beakon posts to an account defined here. Live balances and 12-month trend per account."

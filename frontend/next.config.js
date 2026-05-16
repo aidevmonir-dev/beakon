@@ -17,7 +17,8 @@ const nextConfig = {
     "192.168.0.0/16",               // Common home LAN ranges
     "10.0.0.0/8",                   // Office / VPN ranges
     "*.trycloudflare.com",          // Cloudflare quick tunnels
-    "*.ngrok-free.app",             // ngrok free tier
+    "*.ngrok-free.app",             // ngrok free tier (legacy .app)
+    "*.ngrok-free.dev",             // ngrok free tier (current .dev)
     "*.ngrok.io",                   // ngrok legacy
     ...((process.env.NEXT_PUBLIC_DEV_ORIGINS || "")
       .split(",").map((s) => s.trim()).filter(Boolean)),

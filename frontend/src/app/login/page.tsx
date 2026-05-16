@@ -1,14 +1,27 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { FormEvent, Suspense, useState } from "react";
 import { ArrowRight, LockKeyhole, Mail, Sparkles } from "lucide-react";
 import { hasOrganizationContext, login } from "@/lib/api";
+import { safeNextPath } from "@/lib/safe-next";
 import Logo from "@/components/logo";
 
 export default function LoginPage() {
+  // useSearchParams forces this route into client-side bailout during
+  // static export; wrap in <Suspense> so the build can emit a shell.
+  return (
+    <Suspense fallback={null}>
+      <LoginPageInner />
+    </Suspense>
+  );
+}
+
+function LoginPageInner() {
   const router = useRouter();
+  const params = useSearchParams();
+  const next = safeNextPath(params.get("next"));
   const [email, setEmail] = useState("demo@beakon.com");
   const [password, setPassword] = useState("demo1234");
   const [error, setError] = useState("");
@@ -21,7 +34,17 @@ export default function LoginPage() {
 
     try {
       await login(email, password);
-      router.push(hasOrganizationContext() ? "/dashboard" : "/setup");
+      // Preserve the deep-link the user came from. If they had no
+      // organization context yet, /setup still runs first; we round-trip
+      // `?next=` so setup can hand control back when finished.
+      const hasOrg = hasOrganizationContext();
+      if (next && hasOrg) {
+        router.push(next);
+      } else if (next) {
+        router.push(`/setup?next=${encodeURIComponent(next)}`);
+      } else {
+        router.push(hasOrg ? "/dashboard" : "/setup");
+      }
     } catch (err: any) {
       setError(err?.detail || "Invalid email or password");
     } finally {

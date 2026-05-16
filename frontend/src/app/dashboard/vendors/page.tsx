@@ -2,8 +2,9 @@
 
 /* Vendors — suppliers we pay. Bills, OCR drafts, and future AP aging
  * reference a Vendor. Org-scoped; soft-delete via is_active. */
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Truck, Plus, X, Search } from "lucide-react";
+import { ArrowLeft, Truck, Plus, X, Search } from "lucide-react";
 import { api } from "@/lib/api";
 import { fmtLabel } from "@/lib/format";
 
@@ -72,6 +73,12 @@ export default function VendorsPage() {
 
   return (
     <div>
+      <Link
+        href="/dashboard/accounting"
+        className="inline-flex items-center text-xs text-gray-500 hover:text-gray-800 mb-3"
+      >
+        <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back to Accounting
+      </Link>
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-lg font-semibold text-gray-900 flex items-center gap-2">

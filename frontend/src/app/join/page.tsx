@@ -1,10 +1,10 @@
 "use client";
 
-/* Stage 0 — "Join Existing Workspace" placeholder.
+/* "Join Existing Workspace" placeholder.
  *
- * The invitation-acceptance flow is a separate workstream (see the UI
- * philosophy doc). This screen explains the situation cleanly rather
- * than redirecting silently or 404-ing.
+ * Reached from the Stage 0 entry at `/`. The invitation-acceptance
+ * flow is a separate workstream — this screen explains the situation
+ * cleanly rather than redirecting silently or 404-ing.
  */
 import { Suspense } from "react";
 import Link from "next/link";
@@ -43,7 +43,7 @@ export default function JoinPlaceholderPage() {
 
           <div className="mt-6">
             <Suspense fallback={<span className="text-sm text-gray-400">Back</span>}>
-              <WorkflowBack fallbackHref="/start" fallbackLabel="entry" />
+              <WorkflowBack fallbackHref="/" fallbackLabel="entry" />
             </Suspense>
           </div>
         </div>

@@ -29,15 +29,19 @@ class OrganizationListCreateView(APIView):
         return Response(OrganizationSerializer(orgs, many=True).data)
 
     def post(self, request):
-        """Create a new organization."""
+        """Create a new organization.
+
+        Chart-of-accounts seeding is no longer done here — the legacy
+        ``ledger.seed`` module was removed when the kernel moved into
+        ``beakon_core``. New orgs land empty; the user populates their
+        CoA via /dashboard/coa-definitions, the AI CoA importer, or
+        the optional sample-dataset toggle in the setup wizard.
+        """
         serializer = OrganizationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         org = OrganizationService.create_organization(
             user=request.user, **serializer.validated_data
         )
-        from ledger.seed import seed_chart_of_accounts
-        seed_chart_of_accounts(org)
-
         return Response(
             OrganizationSerializer(org).data,
             status=status.HTTP_201_CREATED,

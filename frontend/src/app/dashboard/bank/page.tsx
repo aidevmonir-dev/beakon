@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  Building2, ChevronRight, CreditCard, Landmark, Plus, Search, Sparkles, Wallet, X,
+  ArrowLeft, Building2, ChevronRight, CreditCard, Landmark, Plus, Search, Sparkles, Wallet, X,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { fmt2Fixed } from "@/lib/format";
@@ -119,6 +119,12 @@ export default function BankPage() {
 
   return (
     <div>
+      <Link
+        href="/dashboard/accounting"
+        className="inline-flex items-center text-xs text-gray-500 hover:text-gray-800 mb-3"
+      >
+        <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back to Accounting
+      </Link>
       <PageHeader
         title="Bank Accounts"
         description="Live cash positions across every entity. Each row shows the GL balance — what the ledger actually says, not just what the bank statement claims. Click in to import statements, categorise transactions, and track approvals."

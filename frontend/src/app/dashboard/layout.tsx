@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { hasOrganizationContext, isAuthenticated, syncOrganizationContext } from "@/lib/api";
+import { loginUrlWithNext } from "@/lib/safe-next";
 import Sidebar from "@/components/sidebar";
 import Header from "@/components/header";
 import AskBeakon from "@/components/ask-beakon";
@@ -31,19 +32,27 @@ export default function DashboardLayout({
     if (ran.current) return;
     ran.current = true;
 
+    // Capture the path + query the user actually wanted, so that after
+    // login they land back here instead of being dropped on /dashboard.
+    const currentPath =
+      typeof window !== "undefined"
+        ? window.location.pathname + window.location.search
+        : pathname || "/dashboard";
+    const loginHref = loginUrlWithNext(currentPath);
+
     async function bootstrap() {
       if (!isAuthenticated()) {
-        router.push("/login");
+        router.push(loginHref);
         return;
       }
       try {
         await syncOrganizationContext();
       } catch {
-        router.push("/login");
+        router.push(loginHref);
         return;
       }
       if (!hasOrganizationContext()) {
-        router.push("/setup");
+        router.push(`/setup?next=${encodeURIComponent(currentPath)}`);
       }
     }
 
@@ -60,6 +69,8 @@ export default function DashboardLayout({
           expands as a hover overlay so reading area doesn't shift.
           On mobile, pb-20 leaves room for the BottomNav (h-14 + safe-area). */}
       <div className="lg:pl-14">
+        {/* Trial status moved into the header as a compact pill
+            (Thomas §5.10) — no longer competes with page content. */}
         <Header onMenuClick={() => setMobileNavOpen(true)} />
         <main className="p-3 sm:p-5 pb-20 lg:pb-5">
           <div className="canvas-panel min-h-[calc(100vh-5rem-2rem)]">

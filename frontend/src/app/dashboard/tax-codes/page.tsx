@@ -6,9 +6,10 @@
  * Same visual vocabulary as /dashboard/accounts and /dashboard/bank:
  * PageHeader with org context chip, SummaryStat strip, EmptyState with
  * CTA, sticky-header table, drawer for create/edit. */
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowDownCircle, ArrowUpCircle, Globe, Percent, Plus, Receipt, Search,
+  ArrowDownCircle, ArrowLeft, ArrowUpCircle, Globe, Percent, Plus, Receipt, Search,
   Sparkles, X, ChevronDown,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -131,6 +132,12 @@ export default function TaxCodesPage() {
 
   return (
     <div>
+      <Link
+        href="/dashboard/accounting"
+        className="inline-flex items-center text-xs text-gray-500 hover:text-gray-800 mb-3"
+      >
+        <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back to Accounting
+      </Link>
       <PageHeader
         title="Tax Codes"
         description="VAT and other indirect-tax rates with the GL accounts where output and input VAT land. Bills and invoices pick a code per line — the engine routes per-line VAT to the right ledger automatically."

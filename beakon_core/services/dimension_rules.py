@@ -118,6 +118,14 @@ class DimensionRuleService:
 
         Posting accounts (``posting_allowed=True``) are evaluated; header
         and non-posting rows are skipped.
+
+        Gating: ``CoADefinition.dimensions_enabled`` controls whether the
+        dimension layer is active for a given chart. Lines whose account
+        belongs to a CoA with ``dimensions_enabled=False`` are skipped
+        entirely (no account-baseline check, no workbook-rule check).
+        Accounts with no ``coa_definition`` default to enforced so existing
+        rows imported before the gate was wired keep their previous
+        always-on behaviour.
         """
         violations: list[RuleViolation] = []
 
@@ -136,9 +144,15 @@ class DimensionRuleService:
         ):
             rules_by_account.setdefault(rule.account_no, []).append(rule)
 
-        for line in entry.lines.select_related("account").all():
+        for line in entry.lines.select_related("account", "account__coa_definition").all():
             account = line.account
             if not account.posting_allowed:
+                continue
+
+            # CoA gate: dimensions_enabled=False on the account's CoA disables
+            # all dimension enforcement for this line. Missing CoA → enforce.
+            coa = account.coa_definition
+            if coa is not None and not coa.dimensions_enabled:
                 continue
 
             # ── Source 1: Account-level baseline ──

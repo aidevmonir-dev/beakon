@@ -1,0 +1,29 @@
+# Cloudflare Tunnel config for Beakon dev.
+#
+# How to use:
+#   1. Replace TUNNEL_ID with the UUID printed by `cloudflared tunnel create beakon-demo`.
+#   2. Replace yourdomain.com with the domain you added to Cloudflare.
+#   3. Replace the credentials-file path if your user folder differs.
+#   4. Copy this file to:  C:\Users\User\.cloudflared\config.yml
+#      (or run cloudflared with `--config D:\bookkeeper\scripts\tunnel\config.yml`)
+
+tunnel: TUNNEL_ID
+credentials-file: C:\Users\User\.cloudflared\TUNNEL_ID.json
+
+# Routes — request hostname decides which local service the traffic reaches.
+# The catch-all 404 service at the bottom is REQUIRED by cloudflared.
+ingress:
+  # Next.js frontend (npm run dev → port 3000)
+  - hostname: app.yourdomain.com
+    service: http://localhost:3000
+
+  # Django backend (python manage.py runserver → port 8000)
+  - hostname: api.yourdomain.com
+    service: http://localhost:8000
+    originRequest:
+      # Django dev server is single-threaded; give it room before timing out.
+      connectTimeout: 30s
+      noTLSVerify: true
+
+  # Catch-all — must be last.
+  - service: http_status:404

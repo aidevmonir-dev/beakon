@@ -49,6 +49,31 @@ class RegisterView(generics.CreateAPIView):
         )
 
 
+class CheckEmailView(APIView):
+    """POST /auth/check-email/  → {"exists": bool}
+
+    Used by the unified email-first sign-in flow on the frontend so we
+    can branch into "Welcome back, sign in" vs. "Create your account"
+    after the user types their email — no second screen lookup needed.
+
+    Public endpoint by design; the response only confirms account
+    presence (no PII), and the audience (B2B fiduciary firms) is
+    invitation/referral-driven so enumeration risk is minimal. Add
+    rate-limiting at the gateway if that posture changes.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = (request.data.get("email") or "").strip().lower()
+        if not email:
+            return Response(
+                {"detail": "Email is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        exists = User.objects.filter(email__iexact=email).exists()
+        return Response({"exists": exists})
+
+
 # ── Login (with session tracking) ────────────────────────────────────
 
 class CustomTokenObtainPairView(TokenObtainPairView):

@@ -423,3 +423,85 @@ class ApprovalAction(models.Model):
     def __str__(self):
         who = self.actor.email if self.actor_id else "system"
         return f"{self.journal_entry_id}: {self.from_status} → {self.to_status} by {who}"
+
+
+class JECorrection(models.Model):
+    """Reviewer-written correction tied to a JournalEntry.
+
+    Mirrors ``BillCorrection`` but anchored to a JE so the same Teach
+    Beakon flow works for manual / AI-extracted journal entries that
+    don't go through the Bills (AP) pipeline. Phase A captures the
+    correction + a snapshot of what the AI originally proposed; if
+    ``make_reusable_rule`` is True, the API view promotes the
+    correction into a ``LearningRule`` for future extractions.
+
+    Unlike BillCorrection, ``vendor`` is optional — a pure manual JE
+    may have no vendor (a bank charge, an FX reval, an accrual).
+    ``ai_vendor_name`` carries whatever the AI extracted so the audit
+    row preserves that context even when no Vendor record exists.
+    """
+
+    journal_entry = models.ForeignKey(
+        JournalEntry, on_delete=models.CASCADE, related_name="corrections",
+    )
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE,
+        related_name="je_corrections",
+    )
+    # Optional — set when the JE originated from a vendor-style extraction
+    # (the OCR pipeline matched a Vendor record). NULL for pure-manual JEs.
+    vendor = models.ForeignKey(
+        "beakon_core.Vendor", on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="je_corrections",
+        help_text="Optional — vendor matched by the AI extraction, if any.",
+    )
+    ai_vendor_name = models.CharField(
+        max_length=255, blank=True,
+        help_text="AI-extracted vendor name, kept as audit context even "
+                  "when no Vendor record matched.",
+    )
+    # Plain-English explanation of the correction (always saved).
+    correction_text = models.TextField(
+        help_text="Plain-language description of what the AI got wrong "
+                  "on this draft. Always required.",
+    )
+    # Same 9-key taxonomy as BillCorrection so the Teach Beakon UI is
+    # uniform across bills and manual JEs.
+    error_types = models.JSONField(
+        default=list, blank=True,
+        help_text="List of structured error-type keys the user checked.",
+    )
+    make_reusable_rule = models.BooleanField(
+        default=False,
+        help_text="True = user opted to remember this for future entries.",
+    )
+    future_rule_instruction = models.TextField(
+        blank=True,
+        help_text="Plain-English instruction for future similar entries. "
+                  "Empty for one-off corrections.",
+    )
+    ai_proposal_snapshot = models.JSONField(
+        default=dict, blank=True,
+        help_text="Snapshot of the AI's proposed JE / extraction at the "
+                  "moment the correction was written.",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="je_corrections_made",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "beakon_jecorrection"
+        ordering = ["-created_at"]
+        indexes = [
+            # Latest corrections per (org, vendor) — same retrieval shape
+            # as BillCorrection so Phase B can union them at lookup time.
+            models.Index(fields=["organization", "vendor", "-created_at"]),
+            models.Index(fields=["journal_entry"]),
+        ]
+
+    def __str__(self):
+        who = self.created_by.email if self.created_by_id else "—"
+        return f"Correction on JE {self.journal_entry_id} by {who}"

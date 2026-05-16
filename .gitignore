@@ -48,3 +48,8 @@ htmlcov/
 _db_backup_*.sql
 demo_statements/
 monir/
+
+# Avaloq SFTP receiver — local drop directory contains real (or
+# mock) bank zips. Never commit these.
+/incoming/
+/incoming_test/
